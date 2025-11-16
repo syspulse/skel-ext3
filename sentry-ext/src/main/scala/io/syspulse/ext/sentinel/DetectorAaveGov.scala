@@ -6,19 +6,19 @@ import com.typesafe.scalalogging.Logger
 import scala.util.{Try,Success,Failure}
 
 import io.syspulse.skel.plugin.{Plugin,PluginDescriptor}
-import io.syspulse.ext.core.Severity
-import io.syspulse.ext.sentinel.SentryRun
-import io.syspulse.ext.sentinel.Sentry
-import io.syspulse.ext.detector.DetectorConfig
-import io.syspulse.ext.sentinel.util.EventUtil
-import io.syspulse.ext.core.Event
+
+import io.hacken.ext.core.Severity
+import io.hacken.ext.sentinel.SentryRun
+import io.hacken.ext.sentinel.Sentry
+import io.hacken.ext.detector.DetectorConfig
+import io.hacken.ext.sentinel.util.EventUtil
+import io.hacken.ext.core.Event
 
 import requests._
 import ujson._
 
 object DetectorAaveGov {
-  val DEF_API_KEY = "ee1eec9e5b0dc51fef435de760a14269"
-  val GOVERNANCE_SUBGRAPH = "A7QMszgomC9cnnfpAcqZVLr2DffvkGNfimD8iUSMiurK"
+  //val GOVERNANCE_SUBGRAPH = "A7QMszgomC9cnnfpAcqZVLr2DffvkGNfimD8iUSMiurK"
 
   val VOTING_SUBGRAPHS = Map(
     "Ethereum" -> "2QPwuCfFtQ8WSCZoN3i9SmdoabMzbq2pmg4kRbrhymBV",
@@ -62,8 +62,8 @@ object DetectorAaveGov {
     ujson.read(response.text())
   }
 
-  def fetchRecentProposals(apiKey: String, count: Int = 5): Try[Seq[ujson.Value]] = {
-    val endpoint = s"https://gateway-arbitrum.network.thegraph.com/api/$apiKey/subgraphs/id/$GOVERNANCE_SUBGRAPH"
+  def fetchRecentProposals(subgraph: String, apiKey: String, count: Int = 5): Try[Seq[ujson.Value]] = {
+    val endpoint = s"https://gateway-arbitrum.network.thegraph.com/api/$apiKey/subgraphs/id/$subgraph"
 
     val query = s"""
     {
@@ -94,8 +94,8 @@ object DetectorAaveGov {
     }
   }
 
-  def fetchSpecificProposals(apiKey: String, proposalIds: Seq[String]): Try[Seq[ujson.Value]] = {
-    val endpoint = s"https://gateway-arbitrum.network.thegraph.com/api/$apiKey/subgraphs/id/$GOVERNANCE_SUBGRAPH"
+  def fetchSpecificProposals(subgraph: String, apiKey: String, proposalIds: Seq[String]): Try[Seq[ujson.Value]] = {
+    val endpoint = s"https://gateway-arbitrum.network.thegraph.com/api/$apiKey/subgraphs/id/$subgraph"
 
     // Fetch proposals one by one and collect results
     val results = proposalIds.flatMap { proposalId =>
@@ -195,9 +195,13 @@ class DetectorAaveGov(pd: PluginDescriptor) extends Sentry with Plugin {
   }
 
   override def onUpdate(rx: SentryRun, conf: DetectorConfig): Int = {
-    // Store API key from config or use default
-    val apiKey = DetectorConfig.getString(rx.conf, "api_key", DetectorAaveGov.DEF_API_KEY)
+    // Store API key from config
+    val defApiKey = rx.getConfiguration()(c => c.getString("thegraph.api.key")).getOrElse("")
+    val apiKey = DetectorConfig.getString(rx.conf, "api_key", defApiKey)
     rx.set("api_key", apiKey)
+
+    val subgraph = rx.getConfiguration()(c => c.getString("thegraph.subgraph")).getOrElse("")
+    rx.set("subgraph", subgraph)
 
     // Number of recent proposals to check (default 5)
     val proposalCount = DetectorConfig.getInt(rx.conf, "proposal_count", DetectorAaveGov.DEF_PROPOSAL_COUNT)
@@ -226,13 +230,19 @@ class DetectorAaveGov(pd: PluginDescriptor) extends Sentry with Plugin {
   }
 
   override def onCron(rx: SentryRun, elapsed: Long): Seq[Event] = {
+    val subgraph = rx.get("subgraph").asInstanceOf[Option[String]].getOrElse("")
+    if (subgraph.isEmpty) {
+      log.error(s"${rx.getExtId()}: Subgraph is not set")
+      return Seq.empty
+    }
+
     val apiKey = rx.get("api_key").get.asInstanceOf[String]
     val proposalCount = rx.get("proposal_count").asInstanceOf[Option[Int]].getOrElse(DetectorAaveGov.DEF_PROPOSAL_COUNT)
     val proposalIdsStr = rx.get("proposal_ids").asInstanceOf[Option[String]].getOrElse(DetectorAaveGov.DEF_PROPOSAL_IDS)
     val trackActive = rx.get("track_active").asInstanceOf[Option[Boolean]].getOrElse(DetectorAaveGov.DEF_TRACK_ACTIVE)
     val trackCancelled = rx.get("track_cancelled").asInstanceOf[Option[Boolean]].getOrElse(DetectorAaveGov.DEF_TRACK_CANCELLED)
     val trackExecuted = rx.get("track_executed").asInstanceOf[Option[Boolean]].getOrElse(DetectorAaveGov.DEF_TRACK_EXECUTED)
-    val desc = rx.get("desc").asInstanceOf[Option[String]].getOrElse(DetectorAaveGov.DEF_DESC)
+    val desc = rx.get("desc").asInstanceOf[Option[String]].getOrElse(DetectorAaveGov.DEF_DESC)    
 
     log.info(s"${rx.getExtId()}: Checking Aave governance proposals...")
 
@@ -240,10 +250,10 @@ class DetectorAaveGov(pd: PluginDescriptor) extends Sentry with Plugin {
     val proposalsResult = if (proposalIdsStr.nonEmpty && proposalIdsStr.trim.nonEmpty) {
       val ids = proposalIdsStr.split(",").map(_.trim).filter(_.nonEmpty)
       log.info(s"${rx.getExtId()}: Fetching specific proposals: ${ids.mkString(", ")}")
-      DetectorAaveGov.fetchSpecificProposals(apiKey, ids.toSeq)
+      DetectorAaveGov.fetchSpecificProposals(subgraph, apiKey, ids.toSeq)
     } else {
       log.info(s"${rx.getExtId()}: Fetching last $proposalCount proposals")
-      DetectorAaveGov.fetchRecentProposals(apiKey, proposalCount)
+      DetectorAaveGov.fetchRecentProposals(subgraph, apiKey, proposalCount)
     }
 
     proposalsResult match {
