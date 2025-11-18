@@ -307,10 +307,12 @@ def appAssemblyConfig(appName:String,appMainClass:String) =
 // ======================================================================================================================
 lazy val root = (project in file("."))
   .aggregate(    
-    sentry_ext,    
+    sentry_ext,
+    sentry_por,
   )
   .dependsOn(
-    sentry_ext
+    sentry_ext,
+    sentry_por,
   )
   .disablePlugins(sbtassembly.AssemblyPlugin) // this is needed to prevent generating useless assembly and merge error
   .settings(    
@@ -329,12 +331,37 @@ lazy val sentry_ext = (project in file("sentry-ext"))
     sharedConfigDocker,
     dockerBuildxSettings,
 
-    appDockerConfig("sentry-sys","io.syspulse.ext.sentinel.App",Seq("detector-bundle.conf")),
+    appDockerConfig("sentry-sys","io.hacken.ext.sentinel.App",Seq("detector-bundle.conf","application-dev.conf")),
 
     libraryDependencies ++= Seq(      
       libExtCore,
       libExtSentinel,
       libSkelCore,
+      libSkelDsl,      
+      
+      libSkelTest % "test",
+      libScalaTest % "test"
+    ),
+  )
+
+lazy val sentry_por = (project in file("sentry-por"))
+  .enablePlugins(JavaAppPackaging)
+  .enablePlugins(DockerPlugin)
+  .enablePlugins(AshScriptPlugin)
+  .settings (
+    sharedConfig,
+    sharedConfigAssembly,
+    sharedConfigDocker,
+    dockerBuildxSettings,
+
+    appDockerConfig("sentry-por","io.hacken.ext.sentinel.App",Seq("detector-bundle.conf","application-dev.conf")),
+
+    libraryDependencies ++= Seq(
+      libExtCore,
+      libExtSentinel,
+      libSkelCore,
+      libSkelBlockchainRpc,
+      libSkelEthProtocols,
       libSkelDsl,      
       
       libSkelTest % "test",
