@@ -34,23 +34,33 @@ import io.syspulse.skel.blockchain.Blockchains
 import io.syspulse.skel.blockchain.BlockchainRpc
 
 // --------------------------------------------------------------------------------------------------------------------------
-case class User(addr:String,chain:String,uid:Option[String]=None) 
+case class User(addr:String,chain:String,uid:Option[String]=None)
 
 object User {
-  def apply(s:String):User = {
+  def apply(s:String):User = create(s, Map.empty)
+  def apply(s:String, chainMapping: Map[String, String]):User = create(s, chainMapping)
+
+  def create(s:String, chainMapping: Map[String, String]):User = {
     val (addrChain,uid) = s.split("=").toList match {
       case addr :: uid :: Nil => (addr.trim,Some(uid))
       case addr :: Nil => (addr.trim,None)
       case _ => throw new Exception(s"Invalid user format: '${s}'")
     }
 
-    val (addr,chain) = addrChain.split(":").toList match {
+    val (addr,chainPrefix) = addrChain.split(":").toList match {
       case chain :: addr :: Nil => (addr.trim,chain.trim)
       case addr :: Nil => (addr.trim,"")
       case _ => throw new Exception(s"Invalid address format: '${s}'")
     }
 
-    User(addr,chain,uid)
+    // Map chain prefix (kuid) to actual chain name
+    val chain = if (chainPrefix.nonEmpty) {
+      chainMapping.getOrElse(chainPrefix, chainPrefix)
+    } else {
+      ""
+    }
+
+    new User(addr,chain,uid)
   }
 }
 
@@ -59,7 +69,8 @@ case class Balance(
   chain:String,
   token:String,
   tokenAddress:String,
-  value:BigDecimal,
+  value:BigInt,
+  amount:Double,
   blockHeight:Option[Long],
   ts:Long,
   err:Option[String]=None
@@ -108,9 +119,10 @@ class BalanceSourceEvm(rpcUrl: String, chainName: String, snapshotTs: Long) exte
       }
 
       // Convert from wei/token units to decimal based on token decimals
-      val value = BigDecimal(balanceWei) / BigDecimal(10).pow(token.dec)
+      val value = balanceWei
+      val amount = BigDecimal(value) / BigDecimal(10).pow(token.dec)
 
-      Balance(addr, chain, token.sym, token.addr, value, Some(actualBlockHeight), snapshotTs, None)
+      Balance(addr, chain, token.sym, token.addr, value, amount.toDouble, Some(actualBlockHeight), snapshotTs, None)
     }.recoverWith {
       case e: Exception =>
         Failure(new Exception(s"Failed to get EVM balance for ${addr}/${token.sym} at block ${actualBlockHeight}: ${e.getMessage}"))
@@ -137,8 +149,9 @@ class BalanceSourceSolana(rpcUrl: String, chainName: String, snapshotTs: Long) e
       // TODO: Implement Solana balance retrieval
       // For native SOL: use getBalance RPC call
       // For SPL tokens: use getTokenAccountsByOwner
-      val value = BigDecimal(0)
-      Balance(addr, chain, token.sym, token.addr, value, Some(actualBlockHeight), snapshotTs, Some("Solana not implemented"))
+      val value = BigInt(0)
+      val amount = 0.0
+      Balance(addr, chain, token.sym, token.addr, value, amount, Some(actualBlockHeight), snapshotTs, Some("Solana not implemented"))
     }
   }
 }
@@ -186,8 +199,9 @@ class BalanceSourceDune(apiKey: String, snapshotTs: Long) extends BalanceSource 
       // TODO: Implement Dune Analytics API query
       // Query historical balances from Dune at specific block height
       // Use blockHeight if provided, otherwise use cached block height for the chain
-      val value = BigDecimal(0)
-      Balance(addr, chain, token.sym, token.addr, value, blockHeight, snapshotTs, None)
+      val value = BigInt(0)
+      val amount = 0.0
+      Balance(addr, chain, token.sym, token.addr, value, amount, blockHeight, snapshotTs, None)
     }
   }
 }
@@ -202,7 +216,8 @@ object DetectorKuba {
   val DEF_USERS = ""
   val DEF_TOKENS = ""
   val DEF_TIMEZONE = "UTC-8" // Hong Kong Time (UTC-8)
-  val DEF_OUTPUT_CSV = "" // If empty, CSV output is disabled
+  val DEF_OUTPUT_CSV = "./output-1.csv" // If empty, CSV output is disabled
+  val DEF_BALANCE_QUERY_DELAY_MS = 1000L // Delay between balance queries in milliseconds
 
   val DEF_TRACK_ERR = true
   val DEF_TRACK_ERR_ALWAYS = true
@@ -232,15 +247,20 @@ object DetectorKuba {
     ZonedDateTime.of(localDateTime, timezone).toInstant.toEpochMilli
   }
 
-  def balancesToCsv(balances: Seq[Balance], timezone: ZoneId = HONG_KONG_TZ): String = {
+  def balancesToCsv(balances: Seq[Balance], timezone: ZoneId = HONG_KONG_TZ, chainMapping: Map[String, String] = Map.empty): String = {
+    // Create reverse mapping (chain_name -> kuid)
+    val reverseMapping = chainMapping.map { case (k, v) => (v, k) }
+
     val header = "Address,Network,Token,Token Contract Address,Balance,Block Height,Timestamp,Timestamp (Formatted),Error"
     val rows = balances.map { b =>
       val formattedTs = formatTimestamp(b.ts, timezone)
       val blockHeightStr = b.blockHeight.map(_.toString).getOrElse("")
       val errStr = b.err.map(e => s"\"${e.replace("\"", "\"\"")}\"").getOrElse("")
-      s"${b.addr},${b.chain},${b.token},${b.tokenAddress},${b.value},${blockHeightStr},${b.ts},${formattedTs},${errStr}"
+      // Map chain name back to kuid for CSV output
+      val chainKuid = reverseMapping.getOrElse(b.chain, b.chain)
+      s"${b.addr},${chainKuid},${b.token},${b.tokenAddress},${b.value},${blockHeightStr},${b.ts},${formattedTs},${errStr}"
     }
-    (header +: rows).mkString("\n")
+    (header +: rows).mkString("\n") + "\n"
   }
 
   def saveCsv(csv: String, outputPath: String): Try[String] = {
@@ -250,17 +270,17 @@ object DetectorKuba {
     }
   }
   
-  def loadUsers(uri:String):Seq[User] = {
-    val ss = if(uri.startsWith("file://")) 
+  def loadUsers(uri:String, chainMapping: Map[String, String] = Map.empty):Seq[User] = {
+    val ss = if(uri.startsWith("file://"))
       os.read(os.Path(uri.substring(7),os.pwd))
-    else 
+    else
       uri
-    
+
     ss.split("[\n,]")
       .map(s => s.trim)
       .filter(s => s.nonEmpty)
       .filter(s => !s.startsWith("#"))
-      .map(s => User(s))
+      .map(s => User(s, chainMapping))
   }
 
   def loadTokens(uri:String):Seq[Token] = {
@@ -342,7 +362,7 @@ class DetectorKuba(pd: PluginDescriptor) extends Sentry with Plugin {
     }
   }
       
-  override def onInit(rx:SentryRun,conf: DetectorConfig): Int = {    
+  override def onInit(rx:SentryRun,conf: DetectorConfig): Int = {
 
     //onUpdate(rx,conf)
     val r = super.onInit(rx,conf)
@@ -350,17 +370,25 @@ class DetectorKuba(pd: PluginDescriptor) extends Sentry with Plugin {
       return r
     }
 
-    // init Aave
+    // Load blockchain configurations
     val blockchains = rx.getConfiguration()(c => Some(c.getListString("blockchains"))).getOrElse(Seq.empty)
-    
+
     if(blockchains.size == 0) {
       log.error(s"${rx.getExtId()}: blockchains: ${blockchains}")
       return SentryRun.SENTRY_STOPPED
     }
 
     val rpc = Blockchains(blockchains)
-
     rx.set("rpc",rpc)
+
+    // Load chain mapping (kuid -> chain_name) from configuration
+    val chainMapping = rx.getConfiguration()(c => {
+      val mappingConfig = c.getMap("mapping")
+      Some(mappingConfig.toMap)
+    }).getOrElse(Map.empty[String, String])
+
+    log.info(s"${rx.getExtId()}: chain mapping: ${chainMapping}")
+    rx.set("chain_mapping", chainMapping)
 
     SentryRun.SENTRY_INIT
   }
@@ -375,9 +403,15 @@ class DetectorKuba(pd: PluginDescriptor) extends Sentry with Plugin {
     super.onStart(rx,conf)
   }
 
-  override def onUpdate(rx:SentryRun,conf: DetectorConfig): Int = {    
-    
-    val users = DetectorKuba.loadUsers(DetectorConfig.getString(rx.conf,"users",DetectorKuba.DEF_USERS))
+  override def onUpdate(rx:SentryRun,conf: DetectorConfig): Int = {
+
+    // Get chain mapping from context
+    val chainMapping = rx.get("chain_mapping") match {
+      case Some(m: Map[_, _]) => m.asInstanceOf[Map[String, String]]
+      case _ => Map.empty[String, String]
+    }
+
+    val users = DetectorKuba.loadUsers(DetectorConfig.getString(rx.conf,"users",DetectorKuba.DEF_USERS), chainMapping)
     val tokens = DetectorKuba.loadTokens(DetectorConfig.getString(rx.conf,"tokens",DetectorKuba.DEF_TOKENS))
 
     rx.set("users",users)
@@ -455,6 +489,11 @@ class DetectorKuba(pd: PluginDescriptor) extends Sentry with Plugin {
       log.info(s"${rx.getExtId()}: CSV output enabled: ${outputCsv}")
     }
 
+    // Balance query throttling configuration
+    val balanceQueryDelayMs = DetectorConfig.getLong(rx.conf,"balance_query_delay_ms",DetectorKuba.DEF_BALANCE_QUERY_DELAY_MS)
+    rx.set("balance_query_delay_ms",balanceQueryDelayMs)
+    log.info(s"${rx.getExtId()}: balance query delay: ${balanceQueryDelayMs}ms")
+
     SentryRun.SENTRY_RUNNING
   }
 
@@ -502,17 +541,33 @@ class DetectorKuba(pd: PluginDescriptor) extends Sentry with Plugin {
 
     log.info(s"${rx.getExtId()}: snapshot(${ts}) (${DetectorKuba.formatTimestamp(ts, timezone)})")
 
+    // Get throttling delay
+    val delayMs = rx.get("balance_query_delay_ms") match {
+      case Some(d: Long) => d
+      case _ => DetectorKuba.DEF_BALANCE_QUERY_DELAY_MS
+    }
+
     // Block heights are already calculated and cached in BalanceSource during construction
-    val balances: Seq[Balance] = users.flatMap { user =>      
+    val balances: Seq[Balance] = users.flatMap { user =>
       tokens.map { token => {
-        log.info(s"${rx.getExtId()}: BALANCE: ${user.addr}: chain=${user.chain}, token=${token.addr} (${token.sym})")
-        balanceSource.getBalance(user.addr, user.chain, token, None) match {
-          case Success(balance: Balance) =>
+
+        val balance = balanceSource.getBalance(user.addr, user.chain, token, None) match {
+            case Success(balance: Balance) =>
+             val humanAmount =  TokenUtil.toHuman(balance.amount.toDouble)            
+             log.info(s"${rx.getExtId()}: ${user.addr}: chain=${user.chain}, token=${token.addr} (${token.sym}): ${balance.value} (${humanAmount})")
+
+            // Throttle to avoid overwhelming RPC endpoints
+            if (delayMs > 0) {
+              Thread.sleep(delayMs)
+            }
+
             balance
           case Failure(e) =>
-            log.warn(s"${rx.getExtId()}: failed to get balance: ${user.addr}: ${token.addr} (${token.sym}): ${e.getMessage()}")
-            Balance(user.addr, user.chain, token.sym, token.addr, BigDecimal(0), None, ts, Some(e.getMessage()))
-        }
+            log.warn(s"${rx.getExtId()}: ${user.addr}: chain=${user.chain}, token=${token.addr} (${token.sym}): failed to get balance: ${e.getMessage()}")
+             Balance(user.addr, user.chain, token.sym, token.addr, BigInt(0), 0.0, None, ts, Some(e.getMessage()))
+        }        
+
+        balance
       }}
     }
 
@@ -522,8 +577,14 @@ class DetectorKuba(pd: PluginDescriptor) extends Sentry with Plugin {
       case _ => None
     }
 
+    // Get chain mapping for CSV output
+    val chainMapping = rx.get("chain_mapping") match {
+      case Some(m: Map[_, _]) => m.asInstanceOf[Map[String, String]]
+      case _ => Map.empty[String, String]
+    }
+
     val csvPath = outputCsv.map { path =>
-      val csv = DetectorKuba.balancesToCsv(balances, timezone)
+      val csv = DetectorKuba.balancesToCsv(balances, timezone, chainMapping)
       DetectorKuba.saveCsv(csv, path) match {
         case Success(savedPath) =>
           log.info(s"${rx.getExtId()}: CSV saved to: ${savedPath} (${balances.size} rows)")
