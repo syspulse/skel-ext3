@@ -33,19 +33,51 @@ import io.hacken.ext.sentinel.WithWeb3
 import io.hacken.ext.sentinel.ThresholdDouble
 import io.syspulse.skel.blockchain.Blockchains
 import io.syspulse.skel.blockchain.BlockchainRpc
+import io.syspulse.skel.util.Util
 
 // --------------------------------------------------------------------------------------------------------------------------
 // Moralis API helper for getting block number by timestamp
 object Moralis {
   private val log = Logger(getClass.getName)
 
+  // Chain ID mapping: full chain name -> Moralis chain identifier
+  // Based on https://docs.moralis.com/supported-chains
+  private val chainIdMapping: Map[String, String] = Map(
+    "ethereum" -> "eth",
+    "eth" -> "eth",
+    "polygon" -> "polygon",
+    "matic" -> "polygon",
+    "bsc" -> "bsc",
+    "binance" -> "bsc",
+    "arbitrum" -> "arbitrum",
+    "arb" -> "arbitrum",
+    "base" -> "base",
+    "optimism" -> "optimism",
+    "op" -> "optimism",
+    "avalanche" -> "avalanche",
+    "avax" -> "avalanche",
+    "fantom" -> "fantom",
+    "ftm" -> "fantom",
+    "linea" -> "linea",
+    "ronin" -> "ronin",
+    "pulse" -> "pulse",
+    "gnosis" -> "gnosis",
+    "xdai" -> "gnosis",
+    "moonbeam" -> "moonbeam",
+    "moonriver" -> "moonriver",
+    "cronos" -> "cronos"
+  )
+
   def getBlockByTimestamp(chain: String, timestamp: Long, apiKey: String): Try[Long] = Try {
+    // Map chain name to Moralis chain identifier
+    val moralisChainId = chainIdMapping.getOrElse(chain.toLowerCase, chain.toLowerCase)
+    log.info(s"Mapping chain '${chain}' to Moralis chain ID '${moralisChainId}'")
     // Convert timestamp to ISO 8601 format (UTC)
     val instant = Instant.ofEpochMilli(timestamp)
     val dateStr = instant.toString // Already in ISO 8601 format
 
     // Moralis API URL
-    val urlStr = s"https://deep-index.moralis.io/api/v2.2/dateToBlock?chain=${chain}&date=${java.net.URLEncoder.encode(dateStr, "UTF-8")}"
+    val urlStr = s"https://deep-index.moralis.io/api/v2.2/dateToBlock?chain=${moralisChainId}&date=${java.net.URLEncoder.encode(dateStr, "UTF-8")}"
 
     log.info(s"Calling Moralis API: ${urlStr}")
 
@@ -69,7 +101,7 @@ object Moralis {
         case _ => throw new Exception(s"Invalid response format: ${response.text()}")
       }
 
-      log.info(s"Got block number ${blockNumber} for timestamp ${timestamp} (${dateStr}) on chain ${chain}")
+      log.info(s"Got block number ${blockNumber} for timestamp ${timestamp} (${dateStr}) on chain ${moralisChainId} (${chain})")
       blockNumber
     } else {
       throw new Exception(s"Moralis API error (${response.statusCode}): ${response.text()}")
@@ -142,7 +174,7 @@ class BalanceSourceEvm(rpcUrl: String, chainName: String, chainId: String, snaps
   private val cachedBlockHeight: Long = {
     if (moralisApiKey.nonEmpty) {
       // Use Moralis API to get block height by timestamp
-      Moralis.getBlockByTimestamp(chainId, snapshotTs, moralisApiKey) match {
+      Moralis.getBlockByTimestamp(chainName, snapshotTs, moralisApiKey) match {
         case Success(blockNumber) =>
           log.info(s"Got block height ${blockNumber} for chain ${chainName} (${chainId}) at timestamp ${snapshotTs}")
           blockNumber
@@ -506,18 +538,35 @@ class DetectorKuba(pd: PluginDescriptor) extends Sentry with Plugin {
     val source = DetectorConfig.getString(rx.conf,"source",DetectorKuba.DEF_SRC)
 
     // Moralis API key configuration
-    val moralisApiKey = DetectorConfig.getString(rx.conf,"moralis_api_key",DetectorKuba.DEF_MORALIS_API_KEY)
+    val moralisApiKey = Util.replaceEnvVar(DetectorConfig.getString(rx.conf,"moralis_api_key",DetectorKuba.DEF_MORALIS_API_KEY),sys.env)
     if (moralisApiKey.nonEmpty) {
       log.info(s"${rx.getExtId()}: Moralis API key configured")
     } else {
       log.warn(s"${rx.getExtId()}: Moralis API key not configured, will use current block height")
     }
 
-    // Get snapshot timestamp (will be used to calculate block heights)
-    val snapshotTs = rx.get("snapshot_timestamp") match {
-      case Some(Some(ts: Long)) => ts
-      case Some(ts: Long) => ts
-      case _ => System.currentTimeMillis() // Default to current time if not specified
+    // Timezone configuration
+    val timezoneStr = DetectorConfig.getString(rx.conf,"timezone",DetectorKuba.DEF_TIMEZONE)
+    val timezone = DetectorKuba.parseTimezone(timezoneStr)
+    rx.set("timezone",timezone)
+
+    // Optional: User-specified snapshot timestamp (in configured timezone)
+    // If not specified, will use current time when cron triggers
+    val snapshotTimestampStr = DetectorConfig.getString(rx.conf,"snapshot_timestamp","")
+    val snapshotTs =if(snapshotTimestampStr.nonEmpty) {
+      try {
+        val snapshotTs = DetectorKuba.parseTimestamp(snapshotTimestampStr, timezone)
+        rx.set("snapshot_timestamp",Some(snapshotTs))
+        log.info(s"${rx.getExtId()}: snapshot_timestamp=${snapshotTimestampStr} (${snapshotTs} ms)")
+        snapshotTs
+      } catch {
+        case e: Exception =>
+          log.error(s"${rx.getExtId()}: invalid snapshot_timestamp format: '${snapshotTimestampStr}': ${e.getMessage()}")
+          return SentryRun.SENTRY_STOPPED
+      }
+    } else {
+      rx.set("snapshot_timestamp",None)
+      System.currentTimeMillis()
     }
 
     val balanceSource: BalanceSource = source match {
@@ -537,29 +586,7 @@ class DetectorKuba(pd: PluginDescriptor) extends Sentry with Plugin {
 
     rx.set("source",source)
     rx.set("currency",DetectorConfig.getString(rx.conf,"currency",DetectorKuba.DEF_CURRENCY))
-
-    // Timezone configuration
-    val timezoneStr = DetectorConfig.getString(rx.conf,"timezone",DetectorKuba.DEF_TIMEZONE)
-    val timezone = DetectorKuba.parseTimezone(timezoneStr)
-    rx.set("timezone",timezone)
-
-    // Optional: User-specified snapshot timestamp (in configured timezone)
-    // If not specified, will use current time when cron triggers
-    val snapshotTimestampStr = DetectorConfig.getString(rx.conf,"snapshot_timestamp","")
-    if(snapshotTimestampStr.nonEmpty) {
-      try {
-        val snapshotTs = DetectorKuba.parseTimestamp(snapshotTimestampStr, timezone)
-        rx.set("snapshot_timestamp",Some(snapshotTs))
-        log.info(s"${rx.getExtId()}: snapshot_timestamp=${snapshotTimestampStr} (${snapshotTs} ms)")
-      } catch {
-        case e: Exception =>
-          log.error(s"${rx.getExtId()}: invalid snapshot_timestamp format: '${snapshotTimestampStr}': ${e.getMessage()}")
-          return SentryRun.SENTRY_STOPPED
-      }
-    } else {
-      rx.set("snapshot_timestamp",None)
-    }
-
+    
     // CSV output path configuration
     val outputCsv = DetectorConfig.getString(rx.conf,"output_csv",DetectorKuba.DEF_OUTPUT_CSV)
     rx.set("output_csv",outputCsv)
