@@ -107,9 +107,13 @@ class BalanceSourceEvm(rpcUrl: String, chainName: String, snapshotTs: Long) exte
 
       val balanceWei: BigInt = if (isNativeToken) {
         // Native token (ETH) balance
-        val blockParam = org.web3j.protocol.core.DefaultBlockParameter.valueOf(java.math.BigInteger.valueOf(actualBlockHeight))
-        val ethBalance = web3Trace.ethGetBalance(addr, blockParam).send().getBalance
-        BigInt(ethBalance)
+        // val blockParam = org.web3j.protocol.core.DefaultBlockParameter.valueOf(java.math.BigInteger.valueOf(actualBlockHeight))
+        // val ethBalance = web3Trace.ethGetBalance(addr, blockParam).send().getBalance
+        // BigInt(ethBalance)
+        Eth.getBalance(addr,Some(actualBlockHeight))(web3Trace) match {
+          case Success(balance) => balance
+          case Failure(e) => throw e
+        }
       } else {
         // ERC20 token balance
         TokenUtil.askErc20Balance(token.addr, addr, Some(token.dec), Some(actualBlockHeight))(web3Trace) match {
@@ -242,9 +246,14 @@ object DetectorKuba {
   }
 
   def parseTimestamp(dateStr: String, timezone: ZoneId = HONG_KONG_TZ): Long = {
-    val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
-    val localDateTime = java.time.LocalDateTime.parse(dateStr, formatter)
-    ZonedDateTime.of(localDateTime, timezone).toInstant.toEpochMilli
+    val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss") 
+    val dt = if(dateStr.contains(":")) 
+      dateStr
+    else
+      dateStr + " 00:00:00"
+
+    val localDateTime = java.time.LocalDateTime.parse(dt, formatter)
+    ZonedDateTime.of(localDateTime, timezone).toInstant.toEpochMilli    
   }
 
   def balancesToCsv(balances: Seq[Balance], timezone: ZoneId = HONG_KONG_TZ, chainMapping: Map[String, String] = Map.empty): String = {
@@ -294,8 +303,10 @@ object DetectorKuba {
       .filter(s => s.nonEmpty)
       .filter(s => !s.startsWith("#"))
       .map(s => s.split("=").toList match {
-        case chain :: sym :: addr :: Nil => Token(addr = addr, bid = chain.trim,sym = sym.trim,dec = 0)
-        case chain :: sym :: addr :: dec :: Nil => Token(addr = addr, bid = chain.trim,sym = sym.trim,dec = dec.toInt)
+        case chain :: sym :: addr :: Nil => 
+          Token(addr = if(addr==chain) "" else addr, bid = chain.trim,sym = sym.trim,dec = 0)
+        case chain :: sym :: addr :: dec :: Nil => 
+          Token(addr = if(addr==chain) "" else addr, bid = chain.trim,sym = sym.trim,dec = dec.toInt)
         case _ => throw new Exception(s"Invalid token format: '${s}'")
       })
   }
@@ -490,14 +501,15 @@ class DetectorKuba(pd: PluginDescriptor) extends Sentry with Plugin {
     }
 
     // Balance query throttling configuration
-    val balanceQueryDelayMs = DetectorConfig.getLong(rx.conf,"balance_query_delay_ms",DetectorKuba.DEF_BALANCE_QUERY_DELAY_MS)
-    rx.set("balance_query_delay_ms",balanceQueryDelayMs)
+    val balanceQueryDelayMs = DetectorConfig.getLong(rx.conf,"balance_delay",DetectorKuba.DEF_BALANCE_QUERY_DELAY_MS)
+    rx.set("balance_delay",balanceQueryDelayMs)
     log.info(s"${rx.getExtId()}: balance query delay: ${balanceQueryDelayMs}ms")
 
     SentryRun.SENTRY_RUNNING
   }
 
   def start(rx:SentryRun,job:Job):Seq[Event] = {
+    log.info(s"${rx.getExtId()}: [START]: ${job}")
     
     val balanceSource = rx.get("balance_source") match {
       case Some(bs: BalanceSource) => bs
@@ -542,10 +554,12 @@ class DetectorKuba(pd: PluginDescriptor) extends Sentry with Plugin {
     log.info(s"${rx.getExtId()}: snapshot(${ts}) (${DetectorKuba.formatTimestamp(ts, timezone)})")
 
     // Get throttling delay
-    val delayMs = rx.get("balance_query_delay_ms") match {
+    val delayMs = rx.get("balance_delay") match {
       case Some(d: Long) => d
       case _ => DetectorKuba.DEF_BALANCE_QUERY_DELAY_MS
     }
+
+    var errors = 0L
 
     // Block heights are already calculated and cached in BalanceSource during construction
     val balances: Seq[Balance] = users.flatMap { user =>
@@ -563,8 +577,9 @@ class DetectorKuba(pd: PluginDescriptor) extends Sentry with Plugin {
 
             balance
           case Failure(e) =>
+            errors = errors + 1
             log.warn(s"${rx.getExtId()}: ${user.addr}: chain=${user.chain}, token=${token.addr} (${token.sym}): failed to get balance: ${e.getMessage()}")
-             Balance(user.addr, user.chain, token.sym, token.addr, BigInt(0), 0.0, None, ts, Some(e.getMessage()))
+            Balance(user.addr, user.chain, token.sym, token.addr, BigInt(0), 0.0, None, ts, Some(e.getMessage()))
         }        
 
         balance
@@ -583,8 +598,9 @@ class DetectorKuba(pd: PluginDescriptor) extends Sentry with Plugin {
       case _ => Map.empty[String, String]
     }
 
-    val csvPath = outputCsv.map { path =>
-      val csv = DetectorKuba.balancesToCsv(balances, timezone, chainMapping)
+    val csv = DetectorKuba.balancesToCsv(balances, timezone, chainMapping)
+
+    val csvPath = outputCsv.map { path =>      
       DetectorKuba.saveCsv(csv, path) match {
         case Success(savedPath) =>
           log.info(s"${rx.getExtId()}: CSV saved to: ${savedPath} (${balances.size} rows)")
@@ -601,14 +617,19 @@ class DetectorKuba(pd: PluginDescriptor) extends Sentry with Plugin {
         "job_id" -> job.id,
         "job_ts" -> job.ts.toString,
         "snapshot_ts" -> ts.toString,
-        "snapshot_ts_formatted" -> DetectorKuba.formatTimestamp(ts, timezone),
-        "balances_count" -> balances.size.toString,
-        "csv_path" -> csvPath.getOrElse(""),
-        "balances" -> balances.take(10).map(b => s"${b.addr}: ${b.value}").mkString(",") // First 10 for preview
+        "timezone" -> timezone.getId,
+        "snapshot_time" -> DetectorKuba.formatTimestamp(ts, timezone),
+        "users" -> users.size.toString,
+        "balances" -> balances.size.toString,
+        "errors" -> errors.toString,
+        "csv" -> csvPath.getOrElse(""),
+        "csv_preview" -> csv
       ),
       sev = Some(DetectorKuba.DEF_SEV_OK)
     ))
 
+
+    log.info(s"${rx.getExtId()}: [FINISH]: ${job}")
     ee
   }
 
