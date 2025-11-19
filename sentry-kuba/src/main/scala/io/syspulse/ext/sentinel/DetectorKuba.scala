@@ -221,6 +221,7 @@ object DetectorKuba {
   val DEF_TOKENS = ""
   val DEF_TIMEZONE = "UTC-8" // Hong Kong Time (UTC-8)
   val DEF_OUTPUT_CSV = "./output-1.csv" // If empty, CSV output is disabled
+  val DEF_CSV_PREVIEW = false // Include CSV preview in Event metadata
   val DEF_BALANCE_QUERY_DELAY_MS = 1000L // Delay between balance queries in milliseconds
 
   val DEF_TRACK_ERR = true
@@ -500,6 +501,11 @@ class DetectorKuba(pd: PluginDescriptor) extends Sentry with Plugin {
       log.info(s"${rx.getExtId()}: CSV output enabled: ${outputCsv}")
     }
 
+    // CSV preview in Event metadata
+    val csvPreview = DetectorConfig.getBoolean(rx.conf,"csv_preview",DetectorKuba.DEF_CSV_PREVIEW)
+    rx.set("csv_preview",csvPreview)
+    log.info(s"${rx.getExtId()}: CSV preview in Event: ${csvPreview}")
+
     // Balance query throttling configuration
     val balanceQueryDelayMs = DetectorConfig.getLong(rx.conf,"balance_delay",DetectorKuba.DEF_BALANCE_QUERY_DELAY_MS)
     rx.set("balance_delay",balanceQueryDelayMs)
@@ -563,27 +569,29 @@ class DetectorKuba(pd: PluginDescriptor) extends Sentry with Plugin {
 
     // Block heights are already calculated and cached in BalanceSource during construction
     val balances: Seq[Balance] = users.flatMap { user =>
-      tokens.map { token => {
+      tokens
+        .filter(token => token.bid == user.chain)
+        .map { token => {
 
-        val balance = balanceSource.getBalance(user.addr, user.chain, token, None) match {
-            case Success(balance: Balance) =>
-             val humanAmount =  TokenUtil.toHuman(balance.amount.toDouble)            
-             log.info(s"${rx.getExtId()}: ${user.addr}: chain=${user.chain}, token=${token.addr} (${token.sym}): ${balance.value} (${humanAmount})")
+          val balance = balanceSource.getBalance(user.addr, user.chain, token, None) match {
+              case Success(balance: Balance) =>
+              val humanAmount =  TokenUtil.toHuman(balance.amount.toDouble)            
+              log.info(s"${rx.getExtId()}: ${user.addr}: chain=${user.chain}, token=${token.addr} (${token.sym}): ${balance.value} (${humanAmount})")
 
-            // Throttle to avoid overwhelming RPC endpoints
-            if (delayMs > 0) {
-              Thread.sleep(delayMs)
-            }
+              // Throttle to avoid overwhelming RPC endpoints
+              if (delayMs > 0) {
+                Thread.sleep(delayMs)
+              }
 
-            balance
-          case Failure(e) =>
-            errors = errors + 1
-            log.warn(s"${rx.getExtId()}: ${user.addr}: chain=${user.chain}, token=${token.addr} (${token.sym}): failed to get balance: ${e.getMessage()}")
-            Balance(user.addr, user.chain, token.sym, token.addr, BigInt(0), 0.0, None, ts, Some(e.getMessage()))
-        }        
+              balance
+            case Failure(e) =>
+              errors = errors + 1
+              log.warn(s"${rx.getExtId()}: ${user.addr}: chain=${user.chain}, token=${token.addr} (${token.sym}): failed to get balance: ${e.getMessage()}")
+              Balance(user.addr, user.chain, token.sym, token.addr, BigInt(0), 0.0, None, ts, Some(e.getMessage()))
+          }        
 
-        balance
-      }}
+          balance
+        }}
     }
 
     // Generate CSV output if configured
@@ -611,20 +619,27 @@ class DetectorKuba(pd: PluginDescriptor) extends Sentry with Plugin {
       }
     }
 
+    // Check if CSV preview should be included in Event
+    val includeCsvPreview = rx.get("csv_preview") match {
+      case Some(b: Boolean) => b
+      case _ => DetectorKuba.DEF_CSV_PREVIEW
+    }
+
+    val metadata = Map(
+      "job_id" -> job.id,
+      "job_ts" -> job.ts.toString,
+      "snapshot_ts" -> ts.toString,
+      "timezone" -> timezone.getId,
+      "snapshot_time" -> DetectorKuba.formatTimestamp(ts, timezone),
+      "users" -> users.size.toString,
+      "balances" -> balances.size.toString,
+      "errors" -> errors.toString,
+      "csv" -> csvPath.getOrElse("")
+    ) ++ (if (includeCsvPreview) Map("csv_preview" -> csv) else Map.empty)
+
     val ee = Seq(EventUtil.createEvent(
       did,tx = None,None,conf = Some(rx.getConf()),
-      meta = Map(
-        "job_id" -> job.id,
-        "job_ts" -> job.ts.toString,
-        "snapshot_ts" -> ts.toString,
-        "timezone" -> timezone.getId,
-        "snapshot_time" -> DetectorKuba.formatTimestamp(ts, timezone),
-        "users" -> users.size.toString,
-        "balances" -> balances.size.toString,
-        "errors" -> errors.toString,
-        "csv" -> csvPath.getOrElse(""),
-        "csv_preview" -> csv
-      ),
+      meta = metadata,
       sev = Some(DetectorKuba.DEF_SEV_OK)
     ))
 
