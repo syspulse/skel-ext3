@@ -111,7 +111,7 @@ val sharedConfig = Seq(
     //retrieveManaged := true,  
     organization    := "io.syspulse",
     scalaVersion    := Dependencies.scala,
-    name            := "skel-ext3",
+    name            := "skel-ext",
     version         := appVersion,
 
     scalacOptions ++= Seq("-unchecked", "-deprecation", "-feature", "-language:existentials", "-language:implicitConversions", "-language:higherKinds", "-language:reflectiveCalls", "-language:postfixOps"),
@@ -307,11 +307,11 @@ def appAssemblyConfig(appName:String,appMainClass:String) =
 // ======================================================================================================================
 lazy val root = (project in file("."))
   .aggregate(    
-    sentry_ext,
+    sentry_gov,
     sentry_por,
   )
   .dependsOn(
-    sentry_ext,
+    sentry_gov,
     sentry_por,
   )
   .disablePlugins(sbtassembly.AssemblyPlugin) // this is needed to prevent generating useless assembly and merge error
@@ -321,7 +321,7 @@ lazy val root = (project in file("."))
     dockerBuildxSettings
   )
 
-lazy val sentry_ext = (project in file("sentry-ext"))
+lazy val sentry_gov = (project in file("sentry-gov"))
   .enablePlugins(JavaAppPackaging)
   .enablePlugins(DockerPlugin)
   .enablePlugins(AshScriptPlugin)
@@ -331,7 +331,7 @@ lazy val sentry_ext = (project in file("sentry-ext"))
     sharedConfigDocker,
     dockerBuildxSettings,
 
-    appDockerConfig("sentry-sys","io.hacken.ext.sentinel.App",Seq("detector-bundle.conf","application-dev.conf")),
+    appDockerConfig("sentry-gov","io.hacken.ext.sentinel.App",Seq("detector-bundle.conf","application-dev.conf")),
 
     libraryDependencies ++= Seq(      
       libExtCore,
