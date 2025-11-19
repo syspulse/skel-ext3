@@ -37,6 +37,8 @@ import io.syspulse.skel.blockchain.BlockchainRpc
 case class User(addr:String,chain:String,uid:Option[String]=None)
 
 object User {
+  private val log = Logger(getClass.getName)
+
   def apply(s:String):User = create(s, Map.empty)
   def apply(s:String, chainMapping: Map[String, String]):User = create(s, chainMapping)
 
@@ -55,6 +57,9 @@ object User {
 
     // Map chain prefix (kuid) to actual chain name
     val chain = if (chainPrefix.nonEmpty) {
+      if (!chainMapping.contains(chainPrefix)) {
+        log.warn(s"${addrChain}: Chain mapping not found for prefix: '${chainPrefix}'")
+      }
       chainMapping.getOrElse(chainPrefix, chainPrefix)
     } else {
       ""
@@ -173,7 +178,7 @@ class BalanceSourceChain(rpc: Blockchains, snapshotTs: Long) extends BalanceSour
       val rpcUrl = r.rpcUri
 
       name match {
-        case "ethereum" | "arbitrum" | "base" | "optimism" | "polygon" | "bsc" | "gnosis" | "avalanche" | "fantom" | "scroll" | "zksync" | "linea" | "blast" | "polygon-zkevm" | "telos" =>
+        case _ if DetectorKuba.isEvmChain(name) =>
           Some(name -> new BalanceSourceEvm(rpcUrl, name, snapshotTs))
         case "sol" | "solana" =>
           Some(name -> new BalanceSourceSolana(rpcUrl, name, snapshotTs))
@@ -221,7 +226,7 @@ object DetectorKuba {
   val DEF_TOKENS = ""
   val DEF_TIMEZONE = "UTC-8" // Hong Kong Time (UTC-8)
   val DEF_OUTPUT_CSV = "./output-1.csv" // If empty, CSV output is disabled
-  val DEF_CSV_PREVIEW = false // Include CSV preview in Event metadata
+  val DEF_CSV_PREVIEW = 0 // Number of CSV lines to include in Event metadata (0 = disabled)
   val DEF_BALANCE_QUERY_DELAY_MS = 1000L // Delay between balance queries in milliseconds
 
   val DEF_TRACK_ERR = true
@@ -502,9 +507,9 @@ class DetectorKuba(pd: PluginDescriptor) extends Sentry with Plugin {
     }
 
     // CSV preview in Event metadata
-    val csvPreview = DetectorConfig.getBoolean(rx.conf,"csv_preview",DetectorKuba.DEF_CSV_PREVIEW)
+    val csvPreview = DetectorConfig.getInt(rx.conf,"csv_preview",DetectorKuba.DEF_CSV_PREVIEW)
     rx.set("csv_preview",csvPreview)
-    log.info(s"${rx.getExtId()}: CSV preview in Event: ${csvPreview}")
+    log.info(s"${rx.getExtId()}: CSV preview lines in Event: ${csvPreview}")
 
     // Balance query throttling configuration
     val balanceQueryDelayMs = DetectorConfig.getLong(rx.conf,"balance_delay",DetectorKuba.DEF_BALANCE_QUERY_DELAY_MS)
@@ -620,12 +625,23 @@ class DetectorKuba(pd: PluginDescriptor) extends Sentry with Plugin {
     }
 
     // Check if CSV preview should be included in Event
-    val includeCsvPreview = rx.get("csv_preview") match {
-      case Some(b: Boolean) => b
+    val csvPreviewLines = rx.get("csv_preview") match {
+      case Some(n: Int) => n
       case _ => DetectorKuba.DEF_CSV_PREVIEW
     }
 
+    // Take specified number of lines from CSV for preview
+    val csvPreviewData = if (csvPreviewLines > 0) {
+      val lines = csv.split("\n")
+      val previewLines = lines.take(csvPreviewLines)
+      Some(previewLines.mkString("\n"))
+    } else {
+      None
+    }
+
     val metadata = Map(
+      "mappings" -> chainMapping.size.toString,
+      "tokens" -> tokens.size.toString,
       "job_id" -> job.id,
       "job_ts" -> job.ts.toString,
       "snapshot_ts" -> ts.toString,
@@ -635,7 +651,7 @@ class DetectorKuba(pd: PluginDescriptor) extends Sentry with Plugin {
       "balances" -> balances.size.toString,
       "errors" -> errors.toString,
       "csv" -> csvPath.getOrElse("")
-    ) ++ (if (includeCsvPreview) Map("csv_preview" -> csv) else Map.empty)
+    ) ++ (csvPreviewData.map(preview => Map("csv_preview" -> preview)).getOrElse(Map.empty))
 
     val ee = Seq(EventUtil.createEvent(
       did,tx = None,None,conf = Some(rx.getConf()),
