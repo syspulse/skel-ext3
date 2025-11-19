@@ -34,6 +34,7 @@ import io.hacken.ext.sentinel.ThresholdDouble
 import io.syspulse.skel.blockchain.Blockchains
 import io.syspulse.skel.blockchain.BlockchainRpc
 import io.syspulse.skel.util.Util
+import io.syspulse.skel.util.TimeUtil
 
 // --------------------------------------------------------------------------------------------------------------------------
 // Moralis API helper for getting block number by timestamp
@@ -327,10 +328,12 @@ object DetectorKuba {
 
   val DEF_TRACK_ERR = true
   val DEF_TRACK_ERR_ALWAYS = true
+  val DEF_TRACK_USERS = false // Track individual user events during balance queries
 
-  val DEF_SEV_OK = Severity.INFO
+  val DEF_SEV_OK = Severity.LOW
   val DEF_SEV_WARN = Severity.MEDIUM
   val DEF_SEV_ERR = Severity.ERROR
+  val DEF_SEV_USER = Severity.INFO
 
   // Timezone utilities
   val HONG_KONG_TZ = ZoneId.of("Asia/Hong_Kong") // UTC+8 (not UTC-8)
@@ -610,6 +613,11 @@ class DetectorKuba(pd: PluginDescriptor) extends Sentry with Plugin {
     rx.set("csv_preview",csvPreview)
     log.info(s"${rx.getExtId()}: CSV preview lines in Event: ${csvPreview}")
 
+    // Track individual user events
+    val trackUsers = DetectorConfig.getBoolean(rx.conf,"track_users",DetectorKuba.DEF_TRACK_USERS)
+    rx.set("track_users",trackUsers)
+    log.info(s"${rx.getExtId()}: Track user events: ${trackUsers}")
+
     // Balance query throttling configuration
     val balanceQueryDelayMs = DetectorConfig.getLong(rx.conf,"balance_delay",DetectorKuba.DEF_BALANCE_QUERY_DELAY_MS)
     rx.set("balance_delay",balanceQueryDelayMs)
@@ -669,11 +677,18 @@ class DetectorKuba(pd: PluginDescriptor) extends Sentry with Plugin {
       case _ => DetectorKuba.DEF_BALANCE_QUERY_DELAY_MS
     }
 
+    // Get track_users configuration
+    val trackUsers = rx.get("track_users") match {
+      case Some(b: Boolean) => b
+      case _ => DetectorKuba.DEF_TRACK_USERS
+    }
+
     var errors = 0L
 
     // Block heights are already calculated and cached in BalanceSource during construction
-    val balances: Seq[Balance] = users.flatMap { user =>
-      tokens
+    val balances: Seq[Balance] = users.flatMap { user => {
+      var errorUser = 0L
+      val bb = tokens
         .filter(token => token.bid == user.chain)
         .map { token => {
 
@@ -690,13 +705,38 @@ class DetectorKuba(pd: PluginDescriptor) extends Sentry with Plugin {
               balance
             case Failure(e) =>
               errors = errors + 1
+              errorUser = errorUser + 1
               log.warn(s"${rx.getExtId()}: ${user.addr}: chain=${user.chain}, token=${token.addr} (${token.sym}): failed to get balance: ${e.getMessage()}")
               Balance(user.addr, user.chain, token.sym, token.addr, BigInt(0), 0.0, None, ts, Some(e.getMessage()))
           }        
 
           balance
         }}
-    }
+
+      if(trackUsers) {
+        val metadata = Map(
+          "user" -> user.addr,
+          "chain" -> user.chain,
+          "tokens" -> tokens.size.toString,
+          "job_id" -> job.id,
+          "job_ts" -> job.ts.toString,
+          "snapshot_ts" -> ts.toString,
+          "timezone" -> timezone.getId,
+          "snapshot_time" -> DetectorKuba.formatTimestamp(ts, timezone),
+          "errors" -> errorUser.toString,
+        )
+
+        val e = Seq(EventUtil.createEvent(
+          did,tx = None,None,conf = Some(rx.getConf()),
+          meta = metadata,
+          sev = Some(DetectorKuba.DEF_SEV_USER),
+        ))
+
+        event(e)
+      }
+
+      bb
+    }}
 
     // Generate CSV output if configured
     val outputCsv = rx.get("output_csv") match {
@@ -744,6 +784,9 @@ class DetectorKuba(pd: PluginDescriptor) extends Sentry with Plugin {
       s"block[${chain}]" -> block.toString
     }
 
+    val durationMillis = System.currentTimeMillis() - job.ts
+    val duration = TimeUtil.durationToHuman(durationMillis / 1000.0)
+
     val metadata = Map(
       "mappings" -> chainMapping.size.toString,
       "tokens" -> tokens.size.toString,
@@ -755,7 +798,9 @@ class DetectorKuba(pd: PluginDescriptor) extends Sentry with Plugin {
       "users" -> users.size.toString,
       "balances" -> balances.size.toString,
       "errors" -> errors.toString,
-      "csv" -> csvPath.getOrElse("")
+      "csv" -> csvPath.getOrElse(""),
+      "duration" -> duration,
+      "duration_ms" -> durationMillis.toString
     ) ++ blockMetadata ++ (csvPreviewData.map(preview => Map("csv_preview" -> preview)).getOrElse(Map.empty))
 
     val ee = Seq(EventUtil.createEvent(
