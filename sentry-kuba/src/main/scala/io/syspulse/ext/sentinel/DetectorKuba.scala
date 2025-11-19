@@ -152,7 +152,7 @@ case class Balance(
   tokenAddress:String,
   value:BigInt,
   amount:Double,
-  blockHeight:Option[Long],
+  block:Option[Long],
   ts:Long,
   err:Option[String]=None
 )
@@ -161,7 +161,8 @@ case class Job(id:String,ts:Long)
 
 // --------------------------------------------------------------------------------------------------------------------------
 trait BalanceSource {
-  def getBalance(addr:String,chain:String,token:Token,blockHeight:Option[Long]):Try[Balance]
+  def getBalance(addr:String,chain:String,token:Token,block:Option[Long]):Try[Balance]
+  def getBlocks(): Map[String, Long] = Map.empty // Override in implementations that cache blocks
 }
 
 // EVM-specific implementation
@@ -170,16 +171,16 @@ class BalanceSourceEvm(rpcUrl: String, chainName: String, chainId: String, snaps
   private val log = Logger(getClass.getName)
   private val web3Trace: Web3jTrace = Eth.web3(rpcUrl)
 
-  // Calculate and cache block height for the snapshot timestamp
-  private val cachedBlockHeight: Long = {
+  // Calculate and cache block for the snapshot timestamp
+  private val cachedBlock: Long = {
     if (moralisApiKey.nonEmpty) {
-      // Use Moralis API to get block height by timestamp
+      // Use Moralis API to get block by timestamp
       Moralis.getBlockByTimestamp(chainName, snapshotTs, moralisApiKey) match {
         case Success(blockNumber) =>
-          log.info(s"Got block height ${blockNumber} for chain ${chainName} (${chainId}) at timestamp ${snapshotTs}")
+          log.info(s"Got block ${blockNumber} for chain ${chainName} (${chainId}) at timestamp ${snapshotTs}")
           blockNumber
         case Failure(e) =>
-          log.warn(s"Failed to get block height from Moralis API for chain ${chainName}: ${e.getMessage}, falling back to current block")
+          log.warn(s"Failed to get block from Moralis API for chain ${chainName}: ${e.getMessage}, falling back to current block")
           web3Trace.ethBlockNumber().send().getBlockNumber.longValue()
       }
     } else {
@@ -188,24 +189,24 @@ class BalanceSourceEvm(rpcUrl: String, chainName: String, chainId: String, snaps
     }
   }
 
-  def getBalance(addr:String,chain:String,token:Token,blockHeight:Option[Long]):Try[Balance] = {
-    val actualBlockHeight = blockHeight.getOrElse(cachedBlockHeight)
+  def getBalance(addr:String,chain:String,token:Token,block:Option[Long]):Try[Balance] = {
+    val actualBlock = block.getOrElse(cachedBlock)
 
     Try {
       val isNativeToken = token.addr.isEmpty
 
       val balanceWei: BigInt = if (isNativeToken) {
         // Native token (ETH) balance
-        // val blockParam = org.web3j.protocol.core.DefaultBlockParameter.valueOf(java.math.BigInteger.valueOf(actualBlockHeight))
+        // val blockParam = org.web3j.protocol.core.DefaultBlockParameter.valueOf(java.math.BigInteger.valueOf(actualBlock))
         // val ethBalance = web3Trace.ethGetBalance(addr, blockParam).send().getBalance
         // BigInt(ethBalance)
-        Eth.getBalance(addr,Some(actualBlockHeight))(web3Trace) match {
+        Eth.getBalance(addr,Some(actualBlock))(web3Trace) match {
           case Success(balance) => balance
           case Failure(e) => throw e
         }
       } else {
         // ERC20 token balance
-        TokenUtil.askErc20Balance(token.addr, addr, Some(token.dec), Some(actualBlockHeight))(web3Trace) match {
+        TokenUtil.askErc20Balance(token.addr, addr, Some(token.dec), Some(actualBlock))(web3Trace) match {
           case Success(bal) => bal
           case Failure(e) => throw e
         }
@@ -215,12 +216,14 @@ class BalanceSourceEvm(rpcUrl: String, chainName: String, chainId: String, snaps
       val value = balanceWei
       val amount = BigDecimal(value) / BigDecimal(10).pow(token.dec)
 
-      Balance(addr, chain, token.sym, token.addr, value, amount.toDouble, Some(actualBlockHeight), snapshotTs, None)
+      Balance(addr, chain, token.sym, token.addr, value, amount.toDouble, Some(actualBlock), snapshotTs, None)
     }.recoverWith {
       case e: Exception =>
-        Failure(new Exception(s"Failed to get EVM balance for ${addr}/${token.sym} at block ${actualBlockHeight}: ${e.getMessage}"))
+        Failure(new Exception(s"Failed to get EVM balance for ${addr}/${token.sym} at block ${actualBlock}: ${e.getMessage}"))
     }
   }
+
+  override def getBlocks(): Map[String, Long] = Map(chainName -> cachedBlock)
 }
 
 // Solana-specific implementation
@@ -229,14 +232,14 @@ class BalanceSourceSolana(rpcUrl: String, chainName: String, snapshotTs: Long) e
   // TODO: Initialize sol3j or similar Solana client
   // private val sol3j = new Sol3j(rpcUrl)
 
-  // Calculate and cache block/slot height for the snapshot timestamp
-  private val cachedBlockHeight: Long = {
+  // Calculate and cache block/slot for the snapshot timestamp
+  private val cachedBlock: Long = {
     // TODO: Implement Solana slot/block lookup by timestamp
     0L
   }
 
-  def getBalance(addr:String,chain:String,token:Token,blockHeight:Option[Long]):Try[Balance] = {
-    val actualBlockHeight = blockHeight.getOrElse(cachedBlockHeight)
+  def getBalance(addr:String,chain:String,token:Token,block:Option[Long]):Try[Balance] = {
+    val actualBlock = block.getOrElse(cachedBlock)
 
     Try {
       // TODO: Implement Solana balance retrieval
@@ -244,7 +247,7 @@ class BalanceSourceSolana(rpcUrl: String, chainName: String, snapshotTs: Long) e
       // For SPL tokens: use getTokenAccountsByOwner
       val value = BigInt(0)
       val amount = 0.0
-      Balance(addr, chain, token.sym, token.addr, value, amount, Some(actualBlockHeight), snapshotTs, Some("Solana not implemented"))
+      Balance(addr, chain, token.sym, token.addr, value, amount, Some(actualBlock), snapshotTs, Some("Solana not implemented"))
     }
   }
 }
@@ -274,27 +277,35 @@ class BalanceSourceChain(rpc: Blockchains, snapshotTs: Long, moralisApiKey: Stri
     .toMap
   }
 
-  def getBalance(addr:String,chain:String,token:Token,blockHeight:Option[Long]):Try[Balance] = {
+  def getBalance(addr:String,chain:String,token:Token,block:Option[Long]):Try[Balance] = {
     chainSources.get(chain.toLowerCase) match {
-      case Some(source) => source.getBalance(addr, chain, token, blockHeight)
+      case Some(source) => source.getBalance(addr, chain, token, block)
       case None => Failure(new Exception(s"No balance source configured for chain: ${chain}"))
+    }
+  }
+
+  override def getBlocks(): Map[String, Long] = {
+    chainSources.flatMap { case (chainName, source) =>
+      source.getBlocks().map { case (name, block) =>
+        (name, block)
+      }
     }
   }
 }
 
 class BalanceSourceDune(apiKey: String, snapshotTs: Long) extends BalanceSource {
 
-  // TODO: Calculate block heights for all chains at snapshot timestamp
-  // private val blockHeights: Map[String, Long] = queryBlockHeights(snapshotTs)
+  // TODO: Calculate blocks for all chains at snapshot timestamp
+  // private val blocks: Map[String, Long] = queryBlocks(snapshotTs)
 
-  def getBalance(addr:String,chain:String,token:Token,blockHeight:Option[Long]):Try[Balance] = {
+  def getBalance(addr:String,chain:String,token:Token,block:Option[Long]):Try[Balance] = {
     Try {
       // TODO: Implement Dune Analytics API query
-      // Query historical balances from Dune at specific block height
-      // Use blockHeight if provided, otherwise use cached block height for the chain
+      // Query historical balances from Dune at specific block
+      // Use block if provided, otherwise use cached block for the chain
       val value = BigInt(0)
       val amount = 0.0
-      Balance(addr, chain, token.sym, token.addr, value, amount, blockHeight, snapshotTs, None)
+      Balance(addr, chain, token.sym, token.addr, value, amount, block, snapshotTs, None)
     }
   }
 }
@@ -351,14 +362,14 @@ object DetectorKuba {
     // Create reverse mapping (chain_name -> kuid)
     val reverseMapping = chainMapping.map { case (k, v) => (v, k) }
 
-    val header = "Address,Network,Token,Token Contract Address,Balance,Block Height,Timestamp,Timestamp (Formatted),Error"
+    val header = "Address,Network,Token,Token Contract Address,Balance,Block,Timestamp,Timestamp (Formatted),Error"
     val rows = balances.map { b =>
       val formattedTs = formatTimestamp(b.ts, timezone)
-      val blockHeightStr = b.blockHeight.map(_.toString).getOrElse("")
+      val blockStr = b.block.map(_.toString).getOrElse("")
       val errStr = b.err.map(e => s"\"${e.replace("\"", "\"\"")}\"").getOrElse("")
       // Map chain name back to kuid for CSV output
       val chainKuid = reverseMapping.getOrElse(b.chain, b.chain)
-      s"${b.addr},${chainKuid},${b.token},${b.tokenAddress},${b.value},${blockHeightStr},${b.ts},${formattedTs},${errStr}"
+      s"${b.addr},${chainKuid},${b.token},${b.tokenAddress},${b.value},${blockStr},${b.ts},${formattedTs},${errStr}"
     }
     (header +: rows).mkString("\n") + "\n"
   }
@@ -727,6 +738,12 @@ class DetectorKuba(pd: PluginDescriptor) extends Sentry with Plugin {
       None
     }
 
+    // Get blocks from balance source
+    val blocks = balanceSource.getBlocks()
+    val blockMetadata = blocks.map { case (chain, block) =>
+      s"block[${chain}]" -> block.toString
+    }
+
     val metadata = Map(
       "mappings" -> chainMapping.size.toString,
       "tokens" -> tokens.size.toString,
@@ -739,7 +756,7 @@ class DetectorKuba(pd: PluginDescriptor) extends Sentry with Plugin {
       "balances" -> balances.size.toString,
       "errors" -> errors.toString,
       "csv" -> csvPath.getOrElse("")
-    ) ++ (csvPreviewData.map(preview => Map("csv_preview" -> preview)).getOrElse(Map.empty))
+    ) ++ blockMetadata ++ (csvPreviewData.map(preview => Map("csv_preview" -> preview)).getOrElse(Map.empty))
 
     val ee = Seq(EventUtil.createEvent(
       did,tx = None,None,conf = Some(rx.getConf()),
