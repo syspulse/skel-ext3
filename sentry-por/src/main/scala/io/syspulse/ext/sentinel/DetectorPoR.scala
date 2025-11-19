@@ -29,7 +29,7 @@ import io.hacken.ext.sentinel.ThresholdDouble
 
 // --------------------------------------------------------------------------------------------------------------------------
 object DetectorPoR {
-  val DEF_DESC = "{amount} {por_change}{err}"
+  val DEF_DESC = "{amount} {change}{err}"
   val DEF_WHEN = "cron"
   val DEF_SRC = "chainlink"
   val DEF_COND = "> 0.0"
@@ -111,7 +111,7 @@ class DetectorPoR(pd: PluginDescriptor) extends WithWeb3 with Sentry with Plugin
     // rx.set("api_key",apiKey)
 
     // set state    
-    rx.set("desc",DetectorConfig.getString(rx.conf,"desc",DetectorPoR.DEF_DESC))     
+    rx.set("desc",DetectorConfig.getString(rx.conf,"desc",DetectorPoR.DEF_DESC))
 
     val source = DetectorConfig.getString(rx.conf,"source",DetectorPoR.DEF_SRC)
 
@@ -187,7 +187,7 @@ class DetectorPoR(pd: PluginDescriptor) extends WithWeb3 with Sentry with Plugin
             did,tx = None,Some(addr),conf = Some(rx.getConf()),
             meta = Map(
               "amount" -> amount,
-              "new"-> por.toString,
+              "por"-> por.toString,
               "old"-> por0.toString,
               "diff"-> s"${diff.toString}",
               "change" -> diffPercentHuman,

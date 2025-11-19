@@ -63,7 +63,7 @@ val dockerRegistryDockerHub = Seq(
 )
 
 val sharedConfigDocker = Seq(
-  maintainer := "Dev0 <ak@extractor.live>",
+  maintainer := "Dev0 <dev0@syspulse.io>",
   // openjdk:8-jre-alpine - NOT WORKING ON RP4+ (arm64). Crashes JVM in kubernetes
   // dockerBaseImage := "openjdk:8u212-jre-alpine3.9", //"openjdk:8-jre-alpine",
 
