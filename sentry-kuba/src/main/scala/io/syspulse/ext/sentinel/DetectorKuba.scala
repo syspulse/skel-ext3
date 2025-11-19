@@ -8,6 +8,7 @@ import java.util.UUID
 import java.time.{Instant, ZonedDateTime, ZoneId}
 import java.time.format.DateTimeFormatter
 import os._
+import spray.json._
 
 import io.syspulse.skel.plugin.{Plugin,PluginDescriptor}
 
@@ -32,6 +33,49 @@ import io.hacken.ext.sentinel.WithWeb3
 import io.hacken.ext.sentinel.ThresholdDouble
 import io.syspulse.skel.blockchain.Blockchains
 import io.syspulse.skel.blockchain.BlockchainRpc
+
+// --------------------------------------------------------------------------------------------------------------------------
+// Moralis API helper for getting block number by timestamp
+object Moralis {
+  private val log = Logger(getClass.getName)
+
+  def getBlockByTimestamp(chain: String, timestamp: Long, apiKey: String): Try[Long] = Try {
+    // Convert timestamp to ISO 8601 format (UTC)
+    val instant = Instant.ofEpochMilli(timestamp)
+    val dateStr = instant.toString // Already in ISO 8601 format
+
+    // Moralis API URL
+    val urlStr = s"https://deep-index.moralis.io/api/v2.2/dateToBlock?chain=${chain}&date=${java.net.URLEncoder.encode(dateStr, "UTF-8")}"
+
+    log.info(s"Calling Moralis API: ${urlStr}")
+
+    // Make HTTP GET request
+    val response = requests.get(
+      urlStr,
+      headers = Map(
+        "accept" -> "application/json",
+        "X-API-Key" -> apiKey
+      ),
+      readTimeout = 30000,
+      connectTimeout = 30000
+    )
+
+    if (response.statusCode == 200) {
+      // Parse JSON response to get block number
+      val json = response.text().parseJson.asJsObject
+      val blockNumber = json.fields.get("block") match {
+        case Some(JsNumber(num)) => num.toLong
+        case Some(JsString(str)) => str.toLong
+        case _ => throw new Exception(s"Invalid response format: ${response.text()}")
+      }
+
+      log.info(s"Got block number ${blockNumber} for timestamp ${timestamp} (${dateStr}) on chain ${chain}")
+      blockNumber
+    } else {
+      throw new Exception(s"Moralis API error (${response.statusCode}): ${response.text()}")
+    }
+  }
+}
 
 // --------------------------------------------------------------------------------------------------------------------------
 case class User(addr:String,chain:String,uid:Option[String]=None)
@@ -89,19 +133,27 @@ trait BalanceSource {
 }
 
 // EVM-specific implementation
-class BalanceSourceEvm(rpcUrl: String, chainName: String, snapshotTs: Long) extends BalanceSource {
+class BalanceSourceEvm(rpcUrl: String, chainName: String, chainId: String, snapshotTs: Long, moralisApiKey: String) extends BalanceSource {
 
+  private val log = Logger(getClass.getName)
   private val web3Trace: Web3jTrace = Eth.web3(rpcUrl)
 
   // Calculate and cache block height for the snapshot timestamp
   private val cachedBlockHeight: Long = {
-    // TODO: Implement block height lookup by timestamp for the chain
-    // Options:
-    // 1. Binary search through blocks using web3.ethGetBlockByNumber
-    // 2. Use external API (e.g., Etherscan API: ?module=block&action=getblocknobytime)
-    // 3. Use pre-built timestamp-to-block index
-    // For now, get current block
-    web3Trace.ethBlockNumber().send().getBlockNumber.longValue()
+    if (moralisApiKey.nonEmpty) {
+      // Use Moralis API to get block height by timestamp
+      Moralis.getBlockByTimestamp(chainId, snapshotTs, moralisApiKey) match {
+        case Success(blockNumber) =>
+          log.info(s"Got block height ${blockNumber} for chain ${chainName} (${chainId}) at timestamp ${snapshotTs}")
+          blockNumber
+        case Failure(e) =>
+          log.warn(s"Failed to get block height from Moralis API for chain ${chainName}: ${e.getMessage}, falling back to current block")
+          web3Trace.ethBlockNumber().send().getBlockNumber.longValue()
+      }
+    } else {
+      log.warn(s"Moralis API key not configured, using current block for chain ${chainName}")
+      web3Trace.ethBlockNumber().send().getBlockNumber.longValue()
+    }
   }
 
   def getBalance(addr:String,chain:String,token:Token,blockHeight:Option[Long]):Try[Balance] = {
@@ -166,7 +218,7 @@ class BalanceSourceSolana(rpcUrl: String, chainName: String, snapshotTs: Long) e
 }
 
 // Router that delegates to appropriate chain-specific implementation
-class BalanceSourceChain(rpc: Blockchains, snapshotTs: Long) extends BalanceSource {
+class BalanceSourceChain(rpc: Blockchains, snapshotTs: Long, moralisApiKey: String) extends BalanceSource {
   val log = Logger(this.getClass.getSimpleName)
 
   // Map chain_id -> BalanceSource implementation
@@ -179,7 +231,7 @@ class BalanceSourceChain(rpc: Blockchains, snapshotTs: Long) extends BalanceSour
 
       name match {
         case _ if DetectorKuba.isEvmChain(name) =>
-          Some(name -> new BalanceSourceEvm(rpcUrl, name, snapshotTs))
+          Some(name -> new BalanceSourceEvm(rpcUrl, name, id, snapshotTs, moralisApiKey))
         case "sol" | "solana" =>
           Some(name -> new BalanceSourceSolana(rpcUrl, name, snapshotTs))
         case _ =>
@@ -228,6 +280,7 @@ object DetectorKuba {
   val DEF_OUTPUT_CSV = "./output-1.csv" // If empty, CSV output is disabled
   val DEF_CSV_PREVIEW = 0 // Number of CSV lines to include in Event metadata (0 = disabled)
   val DEF_BALANCE_QUERY_DELAY_MS = 1000L // Delay between balance queries in milliseconds
+  val DEF_MORALIS_API_KEY = "" // Moralis API key for getting block height by timestamp
 
   val DEF_TRACK_ERR = true
   val DEF_TRACK_ERR_ALWAYS = true
@@ -452,6 +505,14 @@ class DetectorKuba(pd: PluginDescriptor) extends Sentry with Plugin {
 
     val source = DetectorConfig.getString(rx.conf,"source",DetectorKuba.DEF_SRC)
 
+    // Moralis API key configuration
+    val moralisApiKey = DetectorConfig.getString(rx.conf,"moralis_api_key",DetectorKuba.DEF_MORALIS_API_KEY)
+    if (moralisApiKey.nonEmpty) {
+      log.info(s"${rx.getExtId()}: Moralis API key configured")
+    } else {
+      log.warn(s"${rx.getExtId()}: Moralis API key not configured, will use current block height")
+    }
+
     // Get snapshot timestamp (will be used to calculate block heights)
     val snapshotTs = rx.get("snapshot_timestamp") match {
       case Some(Some(ts: Long)) => ts
@@ -463,7 +524,7 @@ class DetectorKuba(pd: PluginDescriptor) extends Sentry with Plugin {
       case "chain" =>
         // Get blockchains from configuration
         val rpc = rx.get("rpc").asInstanceOf[Option[Blockchains]].get
-        new BalanceSourceChain(rpc, snapshotTs)
+        new BalanceSourceChain(rpc, snapshotTs, moralisApiKey)
       case "dune" =>
         val apiKey = DetectorConfig.getString(rx.conf,"dune_api_key","")
         new BalanceSourceDune(apiKey, snapshotTs)

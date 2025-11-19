@@ -392,6 +392,7 @@ lazy val sentry_kuba = (project in file("sentry-kuba"))
       libSkelDsl,      
 
       libOsLib,
+      libRequests,
       
       libSkelTest % "test",
       libScalaTest % "test"
