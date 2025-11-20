@@ -1,0 +1,25 @@
+# Token format examples for DetectorKuba
+
+# Format 1: Full format with decimals
+# chain=symbol=address=decimals
+ethereum=USDC=0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48=6
+
+# Format 2: Full format without decimals (defaults to 0)
+# chain=symbol=address
+ethereum=DAI=0x6B175474E89094C44Da98b954EedeAC495271d0F
+
+# Format 3: Native token (address same as chain)
+# chain=symbol=chain
+ethereum=ETH=ethereum
+
+# Format 4: Network + Ticker (will lookup token details)
+# network=TICKER
+ethereum=USDT
+polygon=USDC
+arbitrum=USDT
+
+# Format 5: Just Ticker (will return token on all chains)
+# TICKER
+WBTC
+LINK
+UNI

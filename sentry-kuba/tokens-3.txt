@@ -1,0 +1,3 @@
+ethereum=ETH=ethereum=18,
+arbitrum=ETH=arbitrum=18,
+base=ETH=base=18,
