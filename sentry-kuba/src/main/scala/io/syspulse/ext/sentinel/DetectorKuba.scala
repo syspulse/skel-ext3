@@ -33,6 +33,7 @@ import io.hacken.ext.sentinel.WithWeb3
 import io.hacken.ext.sentinel.ThresholdDouble
 import io.syspulse.skel.blockchain.Blockchains
 import io.syspulse.skel.blockchain.BlockchainRpc
+import io.syspulse.skel.blockchain.Token
 import io.syspulse.skel.util.Util
 import io.syspulse.skel.util.TimeUtil
 
@@ -128,7 +129,7 @@ object User {
 
     val (addr,chainPrefix) = addrChain.split(":").toList match {
       case chain :: addr :: Nil => (addr.trim,chain.trim)
-      case addr :: Nil => (addr.trim,"")
+      case addr :: Nil => (addr.trim,"eth") // default to ethereum
       case _ => throw new Exception(s"Invalid address format: '${s}'")
     }
 
@@ -313,6 +314,8 @@ class BalanceSourceDune(apiKey: String, snapshotTs: Long) extends BalanceSource 
 
 // --------------------------------------------------------------------------------------------------------------------------
 object DetectorKuba {
+  val log = Logger(getClass)
+
   val DEF_DESC = "{addr} {value}{err}"
   val DEF_WHEN = "cron"
   val DEF_SRC = "chain" // chain, dune
@@ -397,7 +400,7 @@ object DetectorKuba {
       .map(s => User(s, chainMapping))
   }
 
-  def loadTokens(uri:String):Seq[Token] = {
+  def loadTokens(uri:String):Seq[Token] = {    
     val ss = if(uri.startsWith("file://"))
       os.read(os.Path(uri.substring(7),os.pwd))
     else
@@ -407,12 +410,43 @@ object DetectorKuba {
       .map(s => s.trim)
       .filter(s => s.nonEmpty)
       .filter(s => !s.startsWith("#"))
-      .map(s => s.split("=").toList match {
-        case chain :: sym :: addr :: Nil => 
-          Token(addr = if(addr==chain) "" else addr, bid = chain.trim,sym = sym.trim,dec = 0)
-        case chain :: sym :: addr :: dec :: Nil => 
-          Token(addr = if(addr==chain) "" else addr, bid = chain.trim,sym = sym.trim,dec = dec.toInt)
-        case _ => throw new Exception(s"Invalid token format: '${s}'")
+      .flatMap(s => {
+        s.split("=").toList match {
+          // Format: chain=sym=addr=dec (e.g., "ethereum=USDC=0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48=6")
+          case chain :: sym :: addr :: dec :: Nil =>
+            Seq(Token(addr = if(addr==chain) "" else addr, bid = chain.trim, sym = sym.trim, dec = dec.toInt))
+
+          // Format: chain=sym=addr (e.g., "ethereum=USDC=0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
+          case chain :: sym :: addr :: Nil =>
+            Seq(Token(addr = if(addr==chain) "" else addr, bid = chain.trim, sym = sym.trim, dec = 0))
+
+          // Format: network=TICKER (e.g., "ethereum=USDC")
+          case network :: ticker :: Nil if !ticker.startsWith("0x") =>
+            log.debug(s"Resolving token by ticker: ${network}:${ticker}")
+            val tokens = Token.resolve(s"${network}:${ticker}")
+            if (tokens.isEmpty) {
+              log.warn(s"Token not found: ${network}:${ticker}")
+            } else {
+              log.info(s"Resolved ${network}:${ticker}: ${tokens.size}: ${tokens.map(_.bid).mkString(",")}")
+            }
+            tokens.toSeq
+
+          // Format: TICKER (e.g., "USDC")
+          case ticker :: Nil if !ticker.startsWith("0x") =>
+            log.debug(s"Resolving token by ticker: ${ticker}")
+            val tokens = Token.resolve(ticker)
+            if (tokens.isEmpty) {
+              log.warn(s"Token not found: ${ticker}")
+            } else {
+              log.info(s"Resolved ${ticker}: ${tokens.size}: ${tokens.map(_.bid).mkString(",")}")
+            }
+            tokens.toSeq
+
+          case _ => 
+            log.warn(s"Invalid token format: '${s}'")
+            //throw new Exception(s"Invalid token format: '${s}'")
+            Seq.empty
+        }
       })
   }
 
@@ -426,7 +460,7 @@ object DetectorKuba {
       .drop(1) // Skip header
       .map(_.trim)
       .filter(_.nonEmpty)
-      .map { line =>
+      .flatMap { line =>
         // Parse CSV line handling quoted values
         val parts = line.split(",", 2)
         if(parts.length == 2) {
@@ -434,9 +468,11 @@ object DetectorKuba {
           // Remove quotes and split by comma
           val tokensStr = parts(1).trim.stripPrefix("\"").stripSuffix("\"")
           val tokens = tokensStr.split(",").map(_.trim).toSeq
-          chainId -> tokens
+          Some(chainId -> tokens)
         } else {
-          throw new Exception(s"Invalid CSV line: '${line}'")
+          log.warn(s"Invalid CSV line: '${line}'")
+          //throw new Exception(s"Invalid CSV line: '${line}'")
+          None
         }
       }
       .toMap
