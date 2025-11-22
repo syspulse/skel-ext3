@@ -27,6 +27,7 @@ object DetectorBubblemaps {
   val DEF_CLUSTER_SIZE = ""
   val DEF_CLUSTER_SHARE = ""
   val DEF_DESC = "Decentralization: {score}"
+  val DEF_TRACK_HOLDERS = 0
 
   val DEF_TRACK_ERR = true
   val DEF_TRACK_ERR_ALWAYS = true
@@ -116,6 +117,10 @@ class DetectorBubblemaps(pd: PluginDescriptor) extends Sentry with Plugin {
     val clusterShare = DetectorConfig.getString(conf, "cluster_share", DetectorBubblemaps.DEF_CLUSTER_SHARE)
     rx.set("cluster_share", new ThresholdDouble(0.0, clusterShare))
 
+    // Set track_holder parameter
+    val trackHolder = DetectorConfig.getInt(conf, "track_holders", DetectorBubblemaps.DEF_TRACK_HOLDERS)
+    rx.set("track_holders", trackHolder)
+
     // Set description
     rx.set("desc", DetectorConfig.getString(conf, "desc", DetectorBubblemaps.DEF_DESC))
 
@@ -124,7 +129,7 @@ class DetectorBubblemaps(pd: PluginDescriptor) extends Sentry with Plugin {
     rx.set("err_always", DetectorConfig.getBoolean(conf, "err_always", DetectorBubblemaps.DEF_TRACK_ERR_ALWAYS))
 
     // Initialize threshold with first query
-    checkDecentralization(rx, init = true)
+    // checkDecentralization(rx, init = true)
 
     SentryRun.SENTRY_RUNNING
   }
@@ -146,8 +151,9 @@ class DetectorBubblemaps(pd: PluginDescriptor) extends Sentry with Plugin {
 
     val bubblemaps = rx.get("bubblemaps").get.asInstanceOf[Bubblemaps]
     val threshold = rx.get("threshold").get.asInstanceOf[ThresholdDouble]
+    val trackHolders = rx.get("track_holders").get.asInstanceOf[Int]
 
-    val result = bubblemaps.getMapData(addr, chain)
+    val result = bubblemaps.getMapData(addr, chain, withHolders = trackHolders > 0)
 
     result match {
       case Success(data) =>
@@ -181,17 +187,21 @@ class DetectorBubblemaps(pd: PluginDescriptor) extends Sentry with Plugin {
           // Combine matching clusters (union, deduplicated) and sort by share descending
           val filteredClusters = (clusterSizeMatches ++ clusterShareMatches).distinct.sortBy(-_.share)
 
-          // Format top 10 holders metadata
-          val topHoldersMetadata = data.top_holders.take(10).map { holder =>
-            val amount = holder.holder_data.map(_.amount.toString).getOrElse("0")
-            s"${holder.address}:${amount}"
-          }.mkString(", ")
-
           // Get Bubblemaps chain for link
           val bubblemapsChain = bubblemaps.mapChain(chain).getOrElse(chain)
           val link = s"https://v2.bubblemaps.io/map?address=${addr}&chain=${bubblemapsChain}"
 
           val desc = rx.get("desc").asInstanceOf[Option[String]].getOrElse(DetectorBubblemaps.DEF_DESC)
+
+          // Format holders metadata if track_holder > 0
+          val holdersMetadata = if (trackHolders > 0) {
+            data.top_holders.take(trackHolders).map { holder =>
+              val share = holder.holder_data.map(h => f"${h.share}%.6f").getOrElse("0")
+              s"${holder.address}:${share}"
+            }.mkString(", ")
+          } else {
+            ""
+          }
 
           // Base metadata
           val baseMetadata = Map(
@@ -199,7 +209,7 @@ class DetectorBubblemaps(pd: PluginDescriptor) extends Sentry with Plugin {
             "old" -> oldScore.toString,
             "clusters" -> filteredClusters.length.toString,
             "total" -> data.clusters.length.toString,
-            "holders" -> topHoldersMetadata,
+            "top" -> holdersMetadata,
             "link" -> link,
             "desc" -> desc
           )
