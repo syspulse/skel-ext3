@@ -18,11 +18,14 @@ import io.hacken.ext.sentinel.util.EventUtil
 import io.hacken.ext.detector.DetectorConfig
 import io.hacken.ext.core.Event
 import io.hacken.ext.sentinel.ThresholdDouble
+import io.hacken.ext.sentinel.ThresholdLong
 
 // --------------------------------------------------------------------------------------------------------------------------
 object DetectorBubblemaps {
   val DEF_CRON = "10 min"
   val DEF_CONDITION = "> 0.0"
+  val DEF_CLUSTER_SIZE = ""
+  val DEF_CLUSTER_SHARE = ""
   val DEF_DESC = "Decentralization: {score}"
 
   val DEF_TRACK_ERR = true
@@ -106,6 +109,13 @@ class DetectorBubblemaps(pd: PluginDescriptor) extends Sentry with Plugin {
     val threshold = new ThresholdDouble(0.0, condition)
     rx.set("threshold", threshold)
 
+    // Set cluster thresholds
+    val clusterSize = DetectorConfig.getString(conf, "cluster_size", DetectorBubblemaps.DEF_CLUSTER_SIZE)
+    rx.set("cluster_size", new ThresholdLong(0, clusterSize))
+
+    val clusterShare = DetectorConfig.getString(conf, "cluster_share", DetectorBubblemaps.DEF_CLUSTER_SHARE)
+    rx.set("cluster_share", new ThresholdDouble(0.0, clusterShare))
+
     // Set description
     rx.set("desc", DetectorConfig.getString(conf, "desc", DetectorBubblemaps.DEF_DESC))
 
@@ -143,18 +153,33 @@ class DetectorBubblemaps(pd: PluginDescriptor) extends Sentry with Plugin {
       case Success(data) =>
         val score = data.decentralization_score
         val oldScore = threshold.value()
-        val changed = threshold.set(score)
+        val scoreChanged = threshold.set(score)
 
-        log.info(s"${rx.getExtId()}: addr=${addr}, chain=${chain}: decentralization_score: ${oldScore} -> ${score}, changed=${changed}")
-        
-        if (changed) {
+        // Get cluster thresholds from context
+        val clusterSizeThreshold = rx.get("cluster_size").get.asInstanceOf[ThresholdLong]
+        val clusterShareThreshold = rx.get("cluster_share").get.asInstanceOf[ThresholdDouble]
+
+        // Check clusters and collect matches
+        val clusterSizeMatches = data.clusters.filter { cluster =>
+          clusterSizeThreshold.set(cluster.holder_count)
+        }
+
+        val clusterShareMatches = data.clusters.filter { cluster =>
+          clusterShareThreshold.set(cluster.share)
+        }
+
+        val clusterSizeChanged = clusterSizeMatches.nonEmpty
+        val clusterShareChanged = clusterShareMatches.nonEmpty
+
+        log.info(s"${rx.getExtId()}: addr=${addr}, chain=${chain}: decentralization_score: ${oldScore} -> ${score}, scoreChanged=${scoreChanged}, clusterSizeChanged=${clusterSizeChanged}, clusterShareChanged=${clusterShareChanged}")
+
+        // Trigger alert if ANY condition is met (OR operation)
+        if (scoreChanged || clusterSizeChanged || clusterShareChanged) {
           // Map decentralization_score to severity
           val severity = mapSeverity(score)
 
-          // Format clusters metadata
-          val clustersMetadata = data.clusters.take(10).map { cluster =>
-            s"share:${cluster.share},amount:${cluster.amount},holders:${cluster.holder_count}"
-          }.mkString("; ")
+          // Combine matching clusters (union, deduplicated) and sort by share descending
+          val filteredClusters = (clusterSizeMatches ++ clusterShareMatches).distinct.sortBy(-_.share)
 
           // Format top 10 holders metadata
           val topHoldersMetadata = data.top_holders.take(10).map { holder =>
@@ -168,14 +193,25 @@ class DetectorBubblemaps(pd: PluginDescriptor) extends Sentry with Plugin {
 
           val desc = rx.get("desc").asInstanceOf[Option[String]].getOrElse(DetectorBubblemaps.DEF_DESC)
 
-          val metadata = Map(
+          // Base metadata
+          val baseMetadata = Map(
             "score" -> score.toString,
             "old" -> oldScore.toString,
-            "clusters" -> clustersMetadata,
+            "clusters" -> filteredClusters.length.toString,
+            "total" -> data.clusters.length.toString,
             "holders" -> topHoldersMetadata,
             "link" -> link,
             "desc" -> desc
           )
+
+          // Add cluster JSON objects as separate metadata fields
+          import spray.json._
+          import BubblemapsJsonProtocol._
+          val clusterMetadata = filteredClusters.take(10).zipWithIndex.map { case (cluster, i) =>
+            s"cluster_$i" -> cluster.toJson.compactPrint
+          }.toMap
+
+          val metadata = baseMetadata ++ clusterMetadata
 
           Seq(EventUtil.createEvent(
             did,
