@@ -18,7 +18,7 @@ class BubblemapsSpec extends AnyWordSpec with Matchers {
       apiResponse.decentralization_score shouldBe 57.51
       apiResponse.clusters should have length 1
       apiResponse.nodes shouldBe None
-      apiResponse.metadata shouldBe defined
+      apiResponse.metadata.dt_update shouldBe "2025-11-21T02:37:30.727236"
 
       val firstCluster = apiResponse.clusters.head
       firstCluster.share shouldBe 0.03490022082813747 +- 0.0001
@@ -30,7 +30,7 @@ class BubblemapsSpec extends AnyWordSpec with Matchers {
     "handle null nodes field" in {
       import BubblemapsJsonProtocol._
 
-      val json = """{"decentralization_score":50.0,"clusters":[],"nodes":null,"metadata":null,"relationships":null}"""
+      val json = """{"decentralization_score":50.0,"clusters":[],"nodes":null,"metadata":{"dt_update":"2025-11-21T00:00:00","ts_update":1732147200,"identified_supply":null},"relationships":null}"""
       val apiResponse = json.parseJson.convertTo[BubblemapsApiResponse]
 
       apiResponse.nodes shouldBe None
@@ -46,7 +46,7 @@ class BubblemapsSpec extends AnyWordSpec with Matchers {
       apiResponse.decentralization_score shouldBe 78.57
       apiResponse.clusters should have length 1
       apiResponse.nodes shouldBe defined
-      apiResponse.metadata shouldBe defined
+      apiResponse.metadata.ts_update should be > 0L
 
       val nodes = apiResponse.nodes.get
       nodes.top_holders should not be empty
@@ -74,7 +74,8 @@ class BubblemapsSpec extends AnyWordSpec with Matchers {
       val response = BubblemapsResponse(
         decentralization_score = apiResponse.decentralization_score,
         clusters = apiResponse.clusters,
-        top_holders = apiResponse.nodes.map(_.top_holders).getOrElse(Seq.empty)
+        top_holders = apiResponse.nodes.map(_.top_holders).getOrElse(Seq.empty),
+        metadata = apiResponse.metadata
       )
 
       response.decentralization_score shouldBe 78.57
