@@ -2,6 +2,9 @@ package io.syspulse.ext.sentinel
 
 import scala.util.{Try, Success, Failure}
 import com.typesafe.scalalogging.Logger
+import spray.json._
+import io.syspulse.skel.service.JsonCommon
+import io.syspulse.skel.blockchain.Blockchain
 
 case class BubblemapsCluster(
   share: Double,
@@ -42,6 +45,25 @@ case class BubblemapsResponse(
   top_holders: Seq[BubblemapsTopHolder]
 )
 
+case class BubblemapsNodes(
+  top_holders: Seq[BubblemapsTopHolder]
+)
+
+case class BubblemapsApiResponse(
+  decentralization_score: Double,
+  clusters: Seq[BubblemapsCluster],
+  nodes: BubblemapsNodes
+)
+
+object BubblemapsJsonProtocol extends DefaultJsonProtocol {
+  implicit val holderDetailsFormat: RootJsonFormat[BubblemapsHolderDetails] = jsonFormat11(BubblemapsHolderDetails)
+  implicit val holderDataFormat: RootJsonFormat[BubblemapsHolderData] = jsonFormat3(BubblemapsHolderData)
+  implicit val topHolderFormat: RootJsonFormat[BubblemapsTopHolder] = jsonFormat4(BubblemapsTopHolder)
+  implicit val clusterFormat: RootJsonFormat[BubblemapsCluster] = jsonFormat3(BubblemapsCluster)
+  implicit val nodesFormat: RootJsonFormat[BubblemapsNodes] = jsonFormat1(BubblemapsNodes)
+  implicit val apiResponseFormat: RootJsonFormat[BubblemapsApiResponse] = jsonFormat3(BubblemapsApiResponse)
+}
+
 class Bubblemaps(uri: String) {
   private val log = Logger(getClass.getName)
 
@@ -51,19 +73,19 @@ class Bubblemaps(uri: String) {
   // Map Blockchain chain names to Bubblemaps chain identifiers
   // Based on https://docs.bubblemaps.io/data/api/endpoints/get-supported-chains
   private val chainMapping: Map[String, String] = Map(
-    "ethereum" -> "eth",
-    "bsc" -> "bsc",
-    "polygon" -> "polygon",
-    "arbitrum" -> "arbitrum",
-    "optimism" -> "optimism",
-    "avalanche" -> "avalanche",
-    "fantom" -> "fantom",
-    "base" -> "base",
-    "linea" -> "linea",
-    "scroll" -> "scroll",
-    "blast" -> "blast",
-    "polygon_zkevm" -> "polygon-zkevm",
-    "zksync" -> "zksync"
+    Blockchain.ETHEREUM.name -> "eth",
+    Blockchain.BSC_MAINNET.name -> "bsc",
+    Blockchain.POLYGON_MAINNET.name -> "polygon",
+    Blockchain.ARBITRUM_MAINNET.name -> "arbitrum",
+    Blockchain.OPTIMISM_MAINNET.name -> "optimism",
+    Blockchain.AVALANCHE_MAINNET.name -> "avalanche",
+    Blockchain.FANTOM_MAINNET.name -> "fantom",
+    Blockchain.BASE_MAINNET.name -> "base",
+    Blockchain.LINEA_MAINNET.name -> "linea",
+    Blockchain.SCROLL_MAINNET.name -> "scroll",
+    Blockchain.BLAST_MAINNET.name -> "blast",
+    Blockchain.POLYGON_ZKEVM_MAINNET.name -> "polygon-zkevm",
+    Blockchain.ZKSYNC_MAINNET.name -> "zksync"
   )
 
   def mapChain(blockchainChain: String): Option[String] = {
@@ -74,7 +96,7 @@ class Bubblemaps(uri: String) {
     val bubblemapsChain = mapChain(chain) match {
       case Some(bmChain) => bmChain
       case None =>
-        log.warn(s"Chain ${chain} not supported by Bubblemaps, using as-is")
+        log.warn(s"Chain not supported: '${chain}'")
         chain.toLowerCase
     }
 
@@ -106,76 +128,14 @@ class Bubblemaps(uri: String) {
   }
 
   private def parseResponse(jsonText: String): Try[BubblemapsResponse] = Try {
-    val json = ujson.read(jsonText)
+    import BubblemapsJsonProtocol._
 
-    // Extract decentralization_score
-    val decentralizationScore = json.obj.get("decentralization_score")
-      .map(_.num)
-      .getOrElse(0.0)
-
-    // Extract clusters
-    val clusters = json.obj.get("clusters") match {
-      case Some(clustersJson) if clustersJson.arr.nonEmpty =>
-        clustersJson.arr.map { cluster =>
-          BubblemapsCluster(
-            share = cluster.obj.get("share").map(_.num).getOrElse(0.0),
-            amount = cluster.obj.get("amount").map(_.num).getOrElse(0.0),
-            holder_count = cluster.obj.get("holder_count").map(_.num.toInt).getOrElse(0)
-          )
-        }.toSeq
-      case _ => Seq.empty
-    }
-
-    // Extract top holders
-    val topHolders = json.obj.get("nodes") match {
-      case Some(nodes) =>
-        nodes.obj.get("top_holders") match {
-          case Some(holders) if holders.arr.nonEmpty =>
-            holders.arr.map { holder =>
-              val address = holder.obj.get("address").map(_.str).getOrElse("")
-
-              val addressDetails = holder.obj.get("address_details").map { details =>
-                BubblemapsHolderDetails(
-                  address = address,
-                  label = details.obj.get("label").map(_.str),
-                  degree = details.obj.get("degree").map(_.num.toInt),
-                  is_supernode = details.obj.get("is_supernode").map(_.bool),
-                  is_contract = details.obj.get("is_contract").map(_.bool),
-                  is_cex = details.obj.get("is_cex").map(_.bool),
-                  is_dex = details.obj.get("is_dex").map(_.bool),
-                  entity_id = details.obj.get("entity_id").map(_.str),
-                  inward_relations = details.obj.get("inward_relations").map(_.num.toInt),
-                  outward_relations = details.obj.get("outward_relations").map(_.num.toInt),
-                  first_activity_date = details.obj.get("first_activity_date").map(_.str)
-                )
-              }
-
-              val holderData = holder.obj.get("holder_data").map { data =>
-                BubblemapsHolderData(
-                  amount = data.obj.get("amount").map(_.num).getOrElse(0.0),
-                  rank = data.obj.get("rank").map(_.num.toInt).getOrElse(0),
-                  share = data.obj.get("share").map(_.num).getOrElse(0.0)
-                )
-              }
-
-              val isShownOnMap = holder.obj.get("is_shown_on_map").map(_.bool).getOrElse(false)
-
-              BubblemapsTopHolder(
-                address = address,
-                address_details = addressDetails,
-                holder_data = holderData,
-                is_shown_on_map = isShownOnMap
-              )
-            }.toSeq
-          case _ => Seq.empty
-        }
-      case _ => Seq.empty
-    }
+    val apiResponse = jsonText.parseJson.convertTo[BubblemapsApiResponse]
 
     BubblemapsResponse(
-      decentralization_score = decentralizationScore,
-      clusters = clusters,
-      top_holders = topHolders
+      decentralization_score = apiResponse.decentralization_score,
+      clusters = apiResponse.clusters,
+      top_holders = apiResponse.nodes.top_holders
     )
   }
 }
