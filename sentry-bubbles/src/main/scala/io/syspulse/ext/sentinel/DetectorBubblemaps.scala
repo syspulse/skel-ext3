@@ -66,10 +66,11 @@ class DetectorBubblemaps(pd: PluginDescriptor) extends Sentry with Plugin {
 
   def mapSeverity(score: Double): Option[Double] = {
     score match {
-      case s if s >= 0.8 => Some(Severity.LOW)
-      case s if s >= 0.5 => Some(Severity.MEDIUM)
-      case s if s >= 0.3 => Some(Severity.HIGH)
-      case _ => Some(Severity.CRITICAL)
+      case s if s < 10.0 => Some(Severity.CRITICAL)
+      case s if s < 30.0 => Some(Severity.HIGH)  // Major
+      case s if s < 50.0 => Some(Severity.MEDIUM)
+      case s if s >= 65.0 => Some(Severity.LOW)
+      case _ => Some(Severity.MEDIUM)  // 50.0 - 64.9 range
     }
   }
 

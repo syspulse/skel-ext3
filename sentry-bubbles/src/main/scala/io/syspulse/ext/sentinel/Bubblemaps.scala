@@ -9,7 +9,8 @@ import io.syspulse.skel.blockchain.Blockchain
 case class BubblemapsCluster(
   share: Double,
   amount: Double,
-  holder_count: Int
+  holder_count: Int,
+  holders: Seq[String]
 )
 
 case class BubblemapsHolderDetails(
@@ -49,19 +50,35 @@ case class BubblemapsNodes(
   top_holders: Seq[BubblemapsTopHolder]
 )
 
+case class BubblemapsIdentifiedSupply(
+  share_in_cexs: Option[Double],
+  share_in_dexs: Option[Double],
+  share_in_other_contracts: Option[Double]
+)
+
+case class BubblemapsMetadata(
+  dt_update: String,
+  ts_update: Long,
+  identified_supply: Option[BubblemapsIdentifiedSupply]
+)
+
 case class BubblemapsApiResponse(
   decentralization_score: Double,
   clusters: Seq[BubblemapsCluster],
-  nodes: BubblemapsNodes
+  nodes: Option[BubblemapsNodes],
+  metadata: Option[BubblemapsMetadata],
+  relationships: Option[JsValue]
 )
 
 object BubblemapsJsonProtocol extends DefaultJsonProtocol {
   implicit val holderDetailsFormat: RootJsonFormat[BubblemapsHolderDetails] = jsonFormat11(BubblemapsHolderDetails)
   implicit val holderDataFormat: RootJsonFormat[BubblemapsHolderData] = jsonFormat3(BubblemapsHolderData)
   implicit val topHolderFormat: RootJsonFormat[BubblemapsTopHolder] = jsonFormat4(BubblemapsTopHolder)
-  implicit val clusterFormat: RootJsonFormat[BubblemapsCluster] = jsonFormat3(BubblemapsCluster)
+  implicit val clusterFormat: RootJsonFormat[BubblemapsCluster] = jsonFormat4(BubblemapsCluster)
   implicit val nodesFormat: RootJsonFormat[BubblemapsNodes] = jsonFormat1(BubblemapsNodes)
-  implicit val apiResponseFormat: RootJsonFormat[BubblemapsApiResponse] = jsonFormat3(BubblemapsApiResponse)
+  implicit val identifiedSupplyFormat: RootJsonFormat[BubblemapsIdentifiedSupply] = jsonFormat3(BubblemapsIdentifiedSupply)
+  implicit val metadataFormat: RootJsonFormat[BubblemapsMetadata] = jsonFormat3(BubblemapsMetadata)
+  implicit val apiResponseFormat: RootJsonFormat[BubblemapsApiResponse] = jsonFormat5(BubblemapsApiResponse)
 }
 
 class Bubblemaps(uri: String) {
@@ -135,7 +152,7 @@ class Bubblemaps(uri: String) {
     BubblemapsResponse(
       decentralization_score = apiResponse.decentralization_score,
       clusters = apiResponse.clusters,
-      top_holders = apiResponse.nodes.top_holders
+      top_holders = apiResponse.nodes.map(_.top_holders).getOrElse(Seq.empty)
     )
   }
 }
