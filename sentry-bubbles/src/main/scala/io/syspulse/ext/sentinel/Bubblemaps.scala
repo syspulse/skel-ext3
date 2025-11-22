@@ -14,16 +14,15 @@ case class BubblemapsCluster(
 )
 
 case class BubblemapsHolderDetails(
-  address: String,
   label: Option[String],
-  degree: Option[Int],
+  degree: Option[Long],
   is_supernode: Option[Boolean],
   is_contract: Option[Boolean],
   is_cex: Option[Boolean],
   is_dex: Option[Boolean],
   entity_id: Option[String],
-  inward_relations: Option[Int],
-  outward_relations: Option[Int],
+  inward_relations: Option[Long],
+  outward_relations: Option[Long],
   first_activity_date: Option[String]
 )
 
@@ -47,7 +46,8 @@ case class BubblemapsResponse(
 )
 
 case class BubblemapsNodes(
-  top_holders: Seq[BubblemapsTopHolder]
+  top_holders: Seq[BubblemapsTopHolder],
+  magic_nodes: Option[Seq[BubblemapsTopHolder]]
 )
 
 case class BubblemapsIdentifiedSupply(
@@ -71,11 +71,11 @@ case class BubblemapsApiResponse(
 )
 
 object BubblemapsJsonProtocol extends DefaultJsonProtocol {
-  implicit val holderDetailsFormat: RootJsonFormat[BubblemapsHolderDetails] = jsonFormat11(BubblemapsHolderDetails)
+  implicit val holderDetailsFormat: RootJsonFormat[BubblemapsHolderDetails] = jsonFormat10(BubblemapsHolderDetails)
   implicit val holderDataFormat: RootJsonFormat[BubblemapsHolderData] = jsonFormat3(BubblemapsHolderData)
   implicit val topHolderFormat: RootJsonFormat[BubblemapsTopHolder] = jsonFormat4(BubblemapsTopHolder)
   implicit val clusterFormat: RootJsonFormat[BubblemapsCluster] = jsonFormat4(BubblemapsCluster)
-  implicit val nodesFormat: RootJsonFormat[BubblemapsNodes] = jsonFormat1(BubblemapsNodes)
+  implicit val nodesFormat: RootJsonFormat[BubblemapsNodes] = jsonFormat2(BubblemapsNodes)
   implicit val identifiedSupplyFormat: RootJsonFormat[BubblemapsIdentifiedSupply] = jsonFormat3(BubblemapsIdentifiedSupply)
   implicit val metadataFormat: RootJsonFormat[BubblemapsMetadata] = jsonFormat3(BubblemapsMetadata)
   implicit val apiResponseFormat: RootJsonFormat[BubblemapsApiResponse] = jsonFormat5(BubblemapsApiResponse)
@@ -109,7 +109,7 @@ class Bubblemaps(uri: String) {
     chainMapping.get(blockchainChain.toLowerCase)
   }
 
-  def getMapData(address: String, chain: String): Try[BubblemapsResponse] = {
+  def getMapData(address: String, chain: String, withHolders: Boolean = false): Try[BubblemapsResponse] = {
     val bubblemapsChain = mapChain(chain) match {
       case Some(bmChain) => bmChain
       case None =>
@@ -117,7 +117,7 @@ class Bubblemaps(uri: String) {
         chain.toLowerCase
     }
 
-    val url = s"${BASE_URL}/maps/${bubblemapsChain}/${address}"
+    val url = s"${BASE_URL}/maps/${bubblemapsChain}/${address}${if (withHolders) "?return_nodes=true" else ""}"    
 
     try {
       log.info(s"Fetching Bubblemaps data --> ${url}")

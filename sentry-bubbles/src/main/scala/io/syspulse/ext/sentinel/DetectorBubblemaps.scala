@@ -22,7 +22,7 @@ import io.hacken.ext.sentinel.ThresholdLong
 
 // --------------------------------------------------------------------------------------------------------------------------
 object DetectorBubblemaps {
-  val DEF_CRON = "10 min"
+  val DEF_CRON = "1 hour"
   val DEF_CONDITION = "> 0.0"
   val DEF_CLUSTER_SIZE = ""
   val DEF_CLUSTER_SHARE = ""
@@ -43,9 +43,9 @@ class DetectorBubblemaps(pd: PluginDescriptor) extends Sentry with Plugin {
     rx.getConfig().env match {
       case "test" => Map()
       case "dev" =>
-        Map("_cron_rate_limit" -> 1 * 10 * 1000L) // 10 sec
+        Map("_cron_rate_limit" -> 10 * 10 * 1000L) // 10 min
       case _ =>
-        Map("_cron_rate_limit" -> 10 * 60 * 1000L) // 10 min
+        Map("_cron_rate_limit" -> 60 * 60 * 1000L) // 1 hour
     }
   }
 

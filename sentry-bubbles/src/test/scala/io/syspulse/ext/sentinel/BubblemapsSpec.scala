@@ -36,5 +36,51 @@ class BubblemapsSpec extends AnyWordSpec with Matchers {
       apiResponse.nodes shouldBe None
       apiResponse.decentralization_score shouldBe 50.0
     }
+
+    "parse JESSE.json with nodes object correctly" in {
+      import BubblemapsJsonProtocol._
+
+      val jsonText = Source.fromFile("sentry-bubbles/JESSE.json").mkString
+      val apiResponse = jsonText.parseJson.convertTo[BubblemapsApiResponse]
+
+      apiResponse.decentralization_score shouldBe 78.57
+      apiResponse.clusters should have length 1
+      apiResponse.nodes shouldBe defined
+      apiResponse.metadata shouldBe defined
+
+      val nodes = apiResponse.nodes.get
+      nodes.top_holders should not be empty
+      nodes.top_holders.head.address shouldBe "0x50f88fe97f72cd3e75b9eb4f747f59bceba80d59"
+      nodes.top_holders.head.address_details shouldBe defined
+      nodes.top_holders.head.address_details.get.label shouldBe Some("jesse")
+      nodes.top_holders.head.holder_data shouldBe defined
+      nodes.top_holders.head.holder_data.get.amount shouldBe 499522929.5003422 +- 0.0001
+
+      nodes.magic_nodes shouldBe defined
+      nodes.magic_nodes.get should not be empty
+
+      val firstCluster = apiResponse.clusters.head
+      firstCluster.share shouldBe 0.0024788075226436996 +- 0.0001
+      firstCluster.holder_count shouldBe 2
+      firstCluster.holders should have length 2
+    }
+
+    "parse BubblemapsResponse from JESSE.json" in {
+      import BubblemapsJsonProtocol._
+
+      val jsonText = Source.fromFile("sentry-bubbles/JESSE.json").mkString
+      val apiResponse = jsonText.parseJson.convertTo[BubblemapsApiResponse]
+
+      val response = BubblemapsResponse(
+        decentralization_score = apiResponse.decentralization_score,
+        clusters = apiResponse.clusters,
+        top_holders = apiResponse.nodes.map(_.top_holders).getOrElse(Seq.empty)
+      )
+
+      response.decentralization_score shouldBe 78.57
+      response.clusters should have length 1
+      response.top_holders should not be empty
+      response.top_holders.length should be > 50
+    }
   }
 }
