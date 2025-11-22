@@ -28,6 +28,7 @@ object DetectorBubblemaps {
   val DEF_CLUSTER_SHARE = ""
   val DEF_DESC = "Decentralization: {score}"
   val DEF_TRACK_HOLDERS = 0
+  val DEF_TRACK_UPDATE = false
 
   val DEF_TRACK_ERR = true
   val DEF_TRACK_ERR_ALWAYS = true
@@ -121,6 +122,10 @@ class DetectorBubblemaps(pd: PluginDescriptor) extends Sentry with Plugin {
     val trackHolder = DetectorConfig.getInt(conf, "track_holders", DetectorBubblemaps.DEF_TRACK_HOLDERS)
     rx.set("track_holders", trackHolder)
 
+    // Set track_update parameter
+    val trackUpdate = DetectorConfig.getBoolean(conf, "track_update", DetectorBubblemaps.DEF_TRACK_UPDATE)
+    rx.set("track_update", trackUpdate)
+
     // Set description
     rx.set("desc", DetectorConfig.getString(conf, "desc", DetectorBubblemaps.DEF_DESC))
 
@@ -152,6 +157,7 @@ class DetectorBubblemaps(pd: PluginDescriptor) extends Sentry with Plugin {
     val bubblemaps = rx.get("bubblemaps").get.asInstanceOf[Bubblemaps]
     val threshold = rx.get("threshold").get.asInstanceOf[ThresholdDouble]
     val trackHolders = rx.get("track_holders").get.asInstanceOf[Int]
+    val trackUpdate = rx.get("track_update").get.asInstanceOf[Boolean]
 
     val result = bubblemaps.getMapData(addr, chain, withHolders = trackHolders > 0)
 
@@ -223,12 +229,20 @@ class DetectorBubblemaps(pd: PluginDescriptor) extends Sentry with Plugin {
 
           val metadata = baseMetadata ++ clusterMetadata
 
+          // Determine timestamp based on track_update
+          val detectorTs = if (trackUpdate) {
+            (data.metadata.ts_update * 1000L).toString
+          } else {
+            "sys"
+          }
+
           Seq(EventUtil.createEvent(
             did,
             tx = None,
             Some(addr),
             conf = Some(rx.getConf()),
             meta = metadata,
+            detectorTs = detectorTs,
             sev = severity
           ))
         } else {

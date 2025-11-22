@@ -42,7 +42,8 @@ case class BubblemapsTopHolder(
 case class BubblemapsResponse(
   decentralization_score: Double,
   clusters: Seq[BubblemapsCluster],
-  top_holders: Seq[BubblemapsTopHolder]
+  top_holders: Seq[BubblemapsTopHolder],
+  metadata: BubblemapsMetadata
 )
 
 case class BubblemapsNodes(
@@ -66,7 +67,7 @@ case class BubblemapsApiResponse(
   decentralization_score: Double,
   clusters: Seq[BubblemapsCluster],
   nodes: Option[BubblemapsNodes],
-  metadata: Option[BubblemapsMetadata],
+  metadata: BubblemapsMetadata,
   relationships: Option[JsValue]
 )
 
@@ -113,8 +114,8 @@ class Bubblemaps(uri: String) {
     val bubblemapsChain = mapChain(chain) match {
       case Some(bmChain) => bmChain
       case None =>
-        log.warn(s"Chain not supported: '${chain}'")
-        chain.toLowerCase
+        return Failure(new Exception(s"Chain not supported: '${chain}'"))
+        //chain.toLowerCase
     }
 
     val url = s"${BASE_URL}/maps/${bubblemapsChain}/${address}${if (withHolders) "?return_nodes=true" else ""}"    
@@ -139,7 +140,6 @@ class Bubblemaps(uri: String) {
       }
     } catch {
       case e: Exception =>
-        log.error(s"Failed to fetch Bubblemaps data: ${e.getMessage}")
         Failure(e)
     }
   }
@@ -152,7 +152,8 @@ class Bubblemaps(uri: String) {
     BubblemapsResponse(
       decentralization_score = apiResponse.decentralization_score,
       clusters = apiResponse.clusters,
-      top_holders = apiResponse.nodes.map(_.top_holders).getOrElse(Seq.empty)
+      top_holders = apiResponse.nodes.map(_.top_holders).getOrElse(Seq.empty),
+      metadata = apiResponse.metadata
     )
   }
 }
