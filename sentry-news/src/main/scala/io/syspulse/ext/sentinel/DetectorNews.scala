@@ -19,7 +19,7 @@ import io.syspulse.ext.sentinel.feeds._
 object DetectorNews {
   val DEF_CRON = "10 minutes"
   val DEF_FEEDS = ""
-  val DEF_DESC = "New post: {title}"
+  val DEF_DESC = "New post: {title}{err}"
   val DEF_KEYWORDS = ""
   val DEF_KEYWORDS_CASE_SENSITIVE = false
   val DEF_MAX_SEEN_POSTS = 1000
@@ -85,9 +85,9 @@ class DetectorNews(pd: PluginDescriptor) extends Sentry with Plugin {
         } else {
           new RssFeed(uri)
         }
-      }
+      }      
 
-    log.info(s"${rx.getExtId()}: Configured ${feeds.size} feeds")
+    log.info(s"${rx.getExtId()}: Configured feeds: ${feeds.size} (${feeds})")
     rx.set("feeds", feeds)
 
     // Configuration
@@ -103,7 +103,7 @@ class DetectorNews(pd: PluginDescriptor) extends Sentry with Plugin {
            DetectorConfig.getBoolean(conf, "err_always", DetectorNews.DEF_TRACK_ERR_ALWAYS))
 
     // Initialize seen posts with current feed state (don't alert on first run)
-    initializeSeenPosts(rx)
+    //initializeSeenPosts(rx)
 
     SentryRun.SENTRY_RUNNING
   }
@@ -115,14 +115,14 @@ class DetectorNews(pd: PluginDescriptor) extends Sentry with Plugin {
       feed.fetchFeed() match {
         case Success(posts) => posts
         case Failure(e) =>
-          log.warn(s"${rx.getExtId()}: Failed to initialize from ${feed.getSource()}: ${e.getMessage}")
+          log.warn(s"${rx.getExtId()}: Failed to initialize: ${feed.getSource()}: ${e.getMessage}")
           Seq.empty
       }
     }
 
     val postIds = currentPosts.map(_.id).toSet
     rx.set("seen_posts", postIds)
-    log.info(s"${rx.getExtId()}: Initialized with ${postIds.size} seen posts")
+    log.info(s"${rx.getExtId()}: Initialized: ${postIds.size} (seen posts)")
   }
 
   override def onCron(rx: SentryRun, elapsed: Long): Seq[Event] = {
@@ -132,16 +132,17 @@ class DetectorNews(pd: PluginDescriptor) extends Sentry with Plugin {
   def checkFeeds(rx: SentryRun): Seq[Event] = {
     val feeds = rx.get("feeds").get.asInstanceOf[Seq[NewsFeed]]
     val seenPosts = rx.get("seen_posts").get.asInstanceOf[Set[String]]
-    val maxSeenPosts = rx.get("max_seen_posts").asInstanceOf[Option[Int]]
-      .getOrElse(DetectorNews.DEF_MAX_SEEN_POSTS)
+    val maxSeenPosts = rx.get("max_seen_posts").asInstanceOf[Option[Int]].getOrElse(DetectorNews.DEF_MAX_SEEN_POSTS)
 
     var errorEvents = Seq.empty[Event]
+
+    log.info(s"${rx.getExtId()}: Feed: ${feeds}")
 
     // Fetch all posts from all feeds
     val allPosts = feeds.flatMap { feed =>
       feed.fetchFeed() match {
         case Success(posts) =>
-          log.info(s"${rx.getExtId()}: Fetched ${posts.size} posts from ${feed.getSource()}")
+          log.info(s"${rx.getExtId()}: Feed: ${feed.getSource()}: ${posts.size}")
           posts
         case Failure(e) =>
           log.warn(s"${rx.getExtId()}: Failed to fetch from ${feed.getSource()}: ${e.getMessage}")
@@ -156,7 +157,7 @@ class DetectorNews(pd: PluginDescriptor) extends Sentry with Plugin {
     // Apply keyword filter if configured
     val filteredPosts = filterByKeywords(rx, newPosts)
 
-    log.info(s"${rx.getExtId()}: Found ${newPosts.size} new posts, ${filteredPosts.size} after keyword filter")
+    log.info(s"${rx.getExtId()}: Posts: ${newPosts.size} (new), ${filteredPosts.size} (filtered)")
 
     // Update seen posts with size limit
     val allPostIds = allPosts.map(_.id).toSet
@@ -195,10 +196,9 @@ class DetectorNews(pd: PluginDescriptor) extends Sentry with Plugin {
       "title" -> post.title,
       "link" -> post.link,
       "author" -> post.author,
-      "date" -> post.publishedDate.toString,
-      "date_formatted" -> DateParser.formatTimestamp(post.publishedDate),
+      "date" -> DateParser.formatTimestamp(post.publishedDate),
       "summary" -> post.summary,
-      "source" -> post.source,
+      "src" -> post.source,      
       "desc" -> desc.replace("{title}", post.title)
     ) ++ post.feedMetadata
 
@@ -214,19 +214,18 @@ class DetectorNews(pd: PluginDescriptor) extends Sentry with Plugin {
   }
 
   private def handleFeedError(rx: SentryRun, feed: NewsFeed, error: Throwable): Seq[Event] = {
-    val trackErr = rx.get("track_err").asInstanceOf[Option[Boolean]]
-      .getOrElse(DetectorNews.DEF_TRACK_ERR)
+    val trackErr = rx.get("track_err").asInstanceOf[Option[Boolean]].getOrElse(DetectorNews.DEF_TRACK_ERR)
 
     if (!trackErr) return Seq.empty
 
-    val always = rx.get("err_always").asInstanceOf[Option[Boolean]]
-      .getOrElse(DetectorNews.DEF_TRACK_ERR_ALWAYS)
+    val always = rx.get("err_always").asInstanceOf[Option[Boolean]].getOrElse(DetectorNews.DEF_TRACK_ERR_ALWAYS)
     val errorKey = s"err_last_${feed.getSourceType()}_${feed.getSource().hashCode}"
     val lastErr = rx.get(errorKey).asInstanceOf[Option[String]]
     val errMsg = error.getMessage()
 
     if (always || lastErr.isEmpty || lastErr.get != errMsg) {
       rx.set(errorKey, errMsg)
+      val desc = rx.get("desc").asInstanceOf[Option[String]].getOrElse(DetectorNews.DEF_DESC)
 
       Seq(EventUtil.createEvent(
         did,
@@ -234,10 +233,10 @@ class DetectorNews(pd: PluginDescriptor) extends Sentry with Plugin {
         monitoredAddr = None,
         conf = Some(rx.getConf()),
         meta = Map(
-          "error" -> errMsg,
-          "feed_type" -> feed.getSourceType(),
-          "source" -> feed.getSource(),
-          "desc" -> s"Feed error: ${errMsg}"
+          "err" -> errMsg,
+          "type" -> feed.getSourceType(),
+          "src" -> feed.getSource(),
+          "desc" -> desc
         ),
         sev = Some(DetectorNews.DEF_SEV_ERR)
       ))
