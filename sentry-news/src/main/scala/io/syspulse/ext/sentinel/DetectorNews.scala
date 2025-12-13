@@ -22,6 +22,7 @@ object DetectorNews {
   val DEF_FEEDS = ""
   val DEF_DESC = "New post: {title}{err}"
   val DEF_FILTER = ""  // Empty = match everything (no filtering)
+  val DEF_MAX = 0  // 0 = no limit on posts to parse
   val DEF_MAX_SEEN_POSTS = 100
 
   val DEF_TRACK_ERR = true
@@ -109,6 +110,8 @@ class DetectorNews(pd: PluginDescriptor) extends Sentry with Plugin {
       rx.set("regexp", None)
     }
 
+    rx.set("max",
+           DetectorConfig.getInt(conf, "max", DetectorNews.DEF_MAX))
     rx.set("max_seen_posts",
            DetectorConfig.getInt(conf, "max_seen_posts", DetectorNews.DEF_MAX_SEEN_POSTS))
     rx.set("track_err",
@@ -146,6 +149,7 @@ class DetectorNews(pd: PluginDescriptor) extends Sentry with Plugin {
   def checkFeeds(rx: SentryRun): Seq[Event] = {
     val feeds = rx.get("feeds").get.asInstanceOf[Seq[NewsFeed]]
     val seenPosts = rx.get("seen_posts").get.asInstanceOf[Set[String]]
+    val max = rx.get("max").asInstanceOf[Option[Int]].getOrElse(DetectorNews.DEF_MAX)
     val maxSeenPosts = rx.get("max_seen_posts").asInstanceOf[Option[Int]].getOrElse(DetectorNews.DEF_MAX_SEEN_POSTS)
 
     var errorEvents = Seq.empty[Event]
@@ -153,7 +157,7 @@ class DetectorNews(pd: PluginDescriptor) extends Sentry with Plugin {
     log.info(s"${rx.getExtId()}: Feed: ${feeds}")
 
     // Fetch all posts from all feeds
-    val allPosts = feeds.flatMap { feed =>
+    val allPostsRaw = feeds.flatMap { feed =>
       feed.fetchFeed() match {
         case Success(posts) =>
           log.info(s"${rx.getExtId()}: Feed: ${feed.getSource()}: ${posts.size}")
@@ -165,13 +169,16 @@ class DetectorNews(pd: PluginDescriptor) extends Sentry with Plugin {
       }
     }
 
+    // Apply max limit if configured (0 = no limit)
+    val allPosts = if (max > 0) allPostsRaw.take(max) else allPostsRaw
+
     // Filter for new posts
     val newPosts = allPosts.filterNot(p => seenPosts.contains(p.id))
 
     // Apply regexp filter if configured
     val filteredPosts = filterByRegexp(rx, newPosts)
 
-    log.info(s"${rx.getExtId()}: Posts: ${newPosts.size} (new), ${filteredPosts.size} (filtered)")
+    log.info(s"${rx.getExtId()}: Posts: ${allPostsRaw.size} (all), ${newPosts.size} (new), ${filteredPosts.size} (filtered)")
 
     // Update seen posts with size limit
     val allPostIds = allPosts.map(_.id).toSet
