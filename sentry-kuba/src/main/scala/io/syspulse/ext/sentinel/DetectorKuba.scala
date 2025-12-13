@@ -18,8 +18,8 @@ import io.syspulse.skel.crypto.eth.SolidityTuple
 import io.syspulse.skel.crypto.eth.Web3jTrace
 import io.syspulse.skel.crypto.Eth
 
-import io.syspulse.haas.ingest.eth.{Block}
-import io.syspulse.haas.ingest.eth.etl.{Tx}
+import io.haas.ingest.eth.{Block}
+import io.haas.ingest.eth.etl.{Tx}
 
 import io.hacken.ext.core.Severity
 import io.hacken.ext.sentinel.SentryRun

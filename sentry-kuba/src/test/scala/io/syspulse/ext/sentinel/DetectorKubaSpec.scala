@@ -9,9 +9,7 @@ import spray.json._
 
 import io.hacken.ext.detector.DetectorConfig
 import io.hacken.ext.sentinel.SentryRun
-import io.syspulse.haas.ingest.eth.etl.Tx
-import io.syspulse.haas.ingest.eth.etl.Block
-import io.syspulse.haas.ingest.eth.etl.LogTx
+
 import io.syspulse.skel.plugin.PluginDescriptor
 import io.hacken.ext.sentinel.util.EventUtil
 import io.hacken.ext.sentinel.util.TokenData
