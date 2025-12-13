@@ -13,8 +13,8 @@ import io.syspulse.skel.crypto.eth.SolidityTuple
 import io.syspulse.skel.crypto.eth.Web3jTrace
 import io.syspulse.skel.crypto.Eth
 
-import io.syspulse.haas.ingest.eth.{Block}
-import io.syspulse.haas.ingest.eth.etl.{Tx}
+import io.haas.ingest.eth.{Block}
+import io.haas.ingest.eth.etl.{Tx}
 
 import io.hacken.ext.core.Severity
 import io.hacken.ext.sentinel.SentryRun
@@ -73,7 +73,7 @@ class DetectorPoR(pd: PluginDescriptor) extends WithWeb3 with Sentry with Plugin
 
     if(chainlink.size() == 0) {
       log.warn(s"${rx.getExtId()}: Oracle Contracts undefined: ${chainlink}")
-      error(s"Oracle contracts undefined")
+      error("Oracle contracts undefined",None)
       return SentryRun.SENTRY_STOPPED
     }
 
@@ -96,7 +96,7 @@ class DetectorPoR(pd: PluginDescriptor) extends WithWeb3 with Sentry with Plugin
 
     if(rx.isAddrEmpty()) {
       log.warn(s"${rx.getExtId()}: address undefined: ${rx.getAddr()}")
-      error(s"Address undefined")
+      error(s"Address undefined",None)
       return SentryRun.SENTRY_STOPPED
     }
     
@@ -121,7 +121,7 @@ class DetectorPoR(pd: PluginDescriptor) extends WithWeb3 with Sentry with Plugin
       val por = chainlink.getPoR(rx.getChain().get,rx.getAddr().get)(getWeb3(rx).get)
       if(por.isFailure) {
         log.warn(s"${rx.getExtId()}: Oracle not found: ${rx.getAddr().get}: ${por}")
-        error(s"Oracle not found for address: ${rx.getAddr().get}")
+        error(s"Oracle not found for address: ${rx.getAddr().get}",None)
         return SentryRun.SENTRY_STOPPED
       }
 
