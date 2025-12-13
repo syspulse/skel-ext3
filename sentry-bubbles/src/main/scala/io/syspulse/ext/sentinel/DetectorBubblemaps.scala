@@ -8,8 +8,8 @@ import scala.util.{Try, Success, Failure}
 import io.syspulse.skel.plugin.{Plugin, PluginDescriptor}
 import io.syspulse.skel.blockchain.Blockchain
 
-import io.syspulse.haas.ingest.eth.{Block}
-import io.syspulse.haas.ingest.eth.etl.{Tx}
+import io.haas.ingest.eth.{Block}
+import io.haas.ingest.eth.etl.{Tx}
 
 import io.hacken.ext.core.Severity
 import io.hacken.ext.sentinel.SentryRun
@@ -82,7 +82,7 @@ class DetectorBubblemaps(pd: PluginDescriptor) extends Sentry with Plugin {
   override def onUpdate(rx: SentryRun, conf: DetectorConfig): Int = {
     if (rx.isAddrEmpty()) {
       log.warn(s"${rx.getExtId()}: address undefined: ${rx.getAddr()}")
-      error(s"Address undefined")
+      error(s"Address undefined",None)
       return SentryRun.SENTRY_STOPPED
     }
 
@@ -98,7 +98,7 @@ class DetectorBubblemaps(pd: PluginDescriptor) extends Sentry with Plugin {
 
     if (apiKey.isEmpty()) {
       log.warn(s"${rx.getExtId()}: Bubblemaps API Key is required")
-      error(s"Bubblemaps API Key is required")
+      error(s"Bubblemaps API Key is required",None)
       return SentryRun.SENTRY_STOPPED
     }
 
