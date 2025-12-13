@@ -4,6 +4,7 @@ import scala.jdk.CollectionConverters._
 import scala.concurrent.duration.{Duration, FiniteDuration}
 import com.typesafe.scalalogging.Logger
 import scala.util.{Try, Success, Failure}
+import scala.util.matching.Regex
 
 import io.syspulse.skel.plugin.{Plugin, PluginDescriptor}
 
@@ -20,9 +21,8 @@ object DetectorNews {
   val DEF_CRON = "10 minutes"
   val DEF_FEEDS = ""
   val DEF_DESC = "New post: {title}{err}"
-  val DEF_KEYWORDS = ""
-  val DEF_KEYWORDS_CASE_SENSITIVE = false
-  val DEF_MAX_SEEN_POSTS = 1000
+  val DEF_FILTER = ""  // Empty = match everything (no filtering)
+  val DEF_MAX_SEEN_POSTS = 100
 
   val DEF_TRACK_ERR = true
   val DEF_TRACK_ERR_ALWAYS = true
@@ -92,9 +92,23 @@ class DetectorNews(pd: PluginDescriptor) extends Sentry with Plugin {
 
     // Configuration
     rx.set("desc", DetectorConfig.getString(conf, "desc", DetectorNews.DEF_DESC))
-    rx.set("keywords", DetectorConfig.getString(conf, "keywords", DetectorNews.DEF_KEYWORDS))
-    rx.set("keywords_case_sensitive",
-           DetectorConfig.getBoolean(conf, "keywords_case_sensitive", DetectorNews.DEF_KEYWORDS_CASE_SENSITIVE))
+
+    // Regexp filter: empty string = match everything (no filtering)
+    val filter = DetectorConfig.getString(conf, "filter", DetectorNews.DEF_FILTER)
+    if (filter.nonEmpty) {
+      try {
+        val regexp = filter.r
+        rx.set("regexp", Some(regexp))
+      } catch {
+        case e: Exception =>
+          log.warn(s"${rx.getExtId()}: Invalid regexp pattern: ${filter}: ${e.getMessage}")
+          error(s"Invalid regexp pattern: ${filter}", None)
+          return SentryRun.SENTRY_STOPPED
+      }
+    } else {
+      rx.set("regexp", None)
+    }
+
     rx.set("max_seen_posts",
            DetectorConfig.getInt(conf, "max_seen_posts", DetectorNews.DEF_MAX_SEEN_POSTS))
     rx.set("track_err",
@@ -154,8 +168,8 @@ class DetectorNews(pd: PluginDescriptor) extends Sentry with Plugin {
     // Filter for new posts
     val newPosts = allPosts.filterNot(p => seenPosts.contains(p.id))
 
-    // Apply keyword filter if configured
-    val filteredPosts = filterByKeywords(rx, newPosts)
+    // Apply regexp filter if configured
+    val filteredPosts = filterByRegexp(rx, newPosts)
 
     log.info(s"${rx.getExtId()}: Posts: ${newPosts.size} (new), ${filteredPosts.size} (filtered)")
 
@@ -170,21 +184,17 @@ class DetectorNews(pd: PluginDescriptor) extends Sentry with Plugin {
     errorEvents ++ postEvents
   }
 
-  private def filterByKeywords(rx: SentryRun, posts: Seq[NewsPost]): Seq[NewsPost] = {
-    val keywordsStr = rx.get("keywords").asInstanceOf[Option[String]].getOrElse("")
-    if (keywordsStr.isEmpty) return posts
+  private def filterByRegexp(rx: SentryRun, posts: Seq[NewsPost]): Seq[NewsPost] = {
+    val regexpOpt = rx.get("regexp").asInstanceOf[Option[Option[Regex]]].flatten
 
-    val caseSensitive = rx.get("keywords_case_sensitive").asInstanceOf[Option[Boolean]]
-      .getOrElse(DetectorNews.DEF_KEYWORDS_CASE_SENSITIVE)
+    // If no regexp configured (empty string), match everything
+    if (regexpOpt.isEmpty) return posts
 
-    val keywords = keywordsStr.split(",").map(_.trim).filter(_.nonEmpty)
+    val regexp = regexpOpt.get
 
     posts.filter { post =>
       val searchText = s"${post.title} ${post.summary}"
-      val text = if (caseSensitive) searchText else searchText.toLowerCase
-      val matchKeywords = if (caseSensitive) keywords else keywords.map(_.toLowerCase)
-
-      matchKeywords.exists(keyword => text.contains(keyword))
+      regexp.findFirstIn(searchText).isDefined
     }
   }
 

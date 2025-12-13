@@ -8,6 +8,8 @@ import com.typesafe.scalalogging.Logger
 class RssFeed(source: String) extends NewsFeed {
   private val log = Logger(getClass.getName)
 
+  override def toString = s"RssFeed($source)"
+
   override def getSource(): String = source
   override def getSourceType(): String = "rss"
 

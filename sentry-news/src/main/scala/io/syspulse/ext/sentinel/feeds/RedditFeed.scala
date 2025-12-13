@@ -8,6 +8,8 @@ import com.typesafe.scalalogging.Logger
 class RedditFeed(source: String) extends NewsFeed {
   private val log = Logger(getClass.getName)
 
+  override def toString = s"RedditFeed($source)"
+
   override def getSource(): String = source
   override def getSourceType(): String = "reddit"
 
