@@ -45,7 +45,7 @@ class RssFeed(source: String) extends NewsFeed {
       val mediaUrl = (item \ "{http://search.yahoo.com/mrss/}content" \ "@url").text.trim
 
       val metadata = Map(
-        "feed_type" -> "rss",
+        "type" -> "rss",
         "categories" -> categories,
         "media_url" -> mediaUrl
       ).filter(_._2.nonEmpty)

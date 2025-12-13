@@ -226,6 +226,7 @@ class DetectorNews(pd: PluginDescriptor) extends Sentry with Plugin {
       conf = Some(rx.getConf()),
       meta = metadata,
       detectorTs = post.publishedDate.toString,
+      eid0 = Some(post.id),
       sev = Some(DetectorNews.DEF_SEV_NEW_POST)
     )
   }

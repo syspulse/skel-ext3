@@ -39,9 +39,10 @@ class RedditFeed(source: String) extends NewsFeed {
       val thumbnail = (entry \ "{http://search.yahoo.com/mrss/}thumbnail" \ "@url").text.trim
 
       val metadata = Map(
-        "feed_type" -> "reddit",
-        "subreddit" -> subreddit,
-        "subreddit_label" -> subredditLabel,
+        "type" -> "reddit",
+        // "subreddit" -> subreddit,
+        // "subreddit_label" -> subredditLabel,
+        "subreddit" -> subredditLabel,
         "thumbnail" -> thumbnail
       ).filter(_._2.nonEmpty)
 

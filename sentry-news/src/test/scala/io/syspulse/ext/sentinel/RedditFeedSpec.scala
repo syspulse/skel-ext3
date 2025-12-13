@@ -21,7 +21,7 @@ class RedditFeedSpec extends AnyFlatSpec with Matchers {
     firstPost.title should not be empty
     firstPost.link should not be empty
     firstPost.publishedDate should be > 0L
-    firstPost.feedMetadata("feed_type") shouldBe "reddit"
+    firstPost.feedMetadata.get("type") shouldBe Some("reddit")
   }
 
   it should "extract subreddit from category" in {
