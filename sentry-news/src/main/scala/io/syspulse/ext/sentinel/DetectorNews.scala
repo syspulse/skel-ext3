@@ -20,6 +20,7 @@ import io.syspulse.ext.sentinel.feeds._
 object DetectorNews {
   val DEF_CRON = "10 minutes"
   val DEF_FEEDS = ""
+  val DEF_TYPE = ""  // Empty = parse URI prefixes (rss://, reddit://), "rss" = all RSS, "reddit" = all Reddit
   val DEF_DESC = "New post: {title}{err}"
   val DEF_FILTER = ""  // Empty = match everything (no filtering)
   val DEF_MAX = 0  // 0 = no limit on posts to parse
@@ -30,6 +31,39 @@ object DetectorNews {
 
   val DEF_SEV_NEW_POST = Severity.INFO
   val DEF_SEV_ERR = Severity.ERROR
+
+  /**
+   * Parse feed URI based on type configuration
+   * @param uri The feed URI (may have rss:// or reddit:// prefix)
+   * @param feedType The configured feed type ("", "rss", or "reddit")
+   * @return Tuple of (actualFeedType: "rss" or "reddit", cleanedUri: String)
+   */
+  def parseFeedUri(uri: String, feedType: String): (String, String) = {
+    feedType.toLowerCase match {
+      case "rss" =>
+        // All feeds are RSS
+        ("rss", uri)
+
+      case "reddit" =>
+        // All feeds are Reddit
+        ("reddit", uri)
+
+      case "" =>
+        // Parse URI prefix: rss://, reddit://, or assume RSS
+        if (uri.startsWith("rss://")) {
+          ("rss", uri.substring(6)) // Strip "rss://"
+        } else if (uri.startsWith("reddit://")) {
+          ("reddit", uri.substring(9)) // Strip "reddit://"
+        } else {
+          // No prefix, assume RSS
+          ("rss", uri)
+        }
+
+      case _ =>
+        // Unknown type, assume RSS
+        ("rss", uri)
+    }
+  }
 }
 
 class DetectorNews(pd: PluginDescriptor) extends Sentry with Plugin {
@@ -76,17 +110,21 @@ class DetectorNews(pd: PluginDescriptor) extends Sentry with Plugin {
       return SentryRun.SENTRY_STOPPED
     }
 
-    // Create feed instances based on URI patterns
+    // Get feed type configuration
+    val feedType = DetectorConfig.getString(conf, "type", DetectorNews.DEF_TYPE).toLowerCase
+
+    // Create feed instances based on type configuration
     val feeds: Seq[NewsFeed] = feedsStr.split(",")
       .map(_.trim)
       .filter(_.nonEmpty)
       .map { uri =>
-        if (uri.contains("reddit") || uri.contains("/domain/")) {
-          new RedditFeed(uri)
-        } else {
-          new RssFeed(uri)
+        val (actualFeedType, cleanedUri) = DetectorNews.parseFeedUri(uri, feedType)
+        actualFeedType match {
+          case "rss" => new RssFeed(cleanedUri)
+          case "reddit" => new RedditFeed(cleanedUri)
+          case _ => new RssFeed(cleanedUri) // Fallback
         }
-      }      
+      }
 
     log.info(s"${rx.getExtId()}: Configured feeds: ${feeds.size} (${feeds})")
     rx.set("feeds", feeds)
