@@ -28,11 +28,11 @@ object Dependencies {
     lazy val janinoVersion = "3.0.16" //"3.1.6" //"3.0.16"
     lazy val elastic4sVersion = "7.17.3"
     
-    lazy val extVersion = "0.16.0"
-    lazy val trunkVersion = "0.16.0"
+    lazy val extVersion = "0.17.0"
+    lazy val trunkVersion = "0.17.0"
     lazy val skelVersion = "0.15.0"
     
-    lazy val appVersion = "0.16.0"
+    lazy val appVersion = "0.17.0"
 
     lazy val jarPrefix = "server-"
     
@@ -122,6 +122,7 @@ object Dependencies {
     // need to exclude log4j to avoid conflict with logback
     val libCask =           "com.lihaoyi"                     %% "cask"                 % "0.7.11" exclude("log4j", "log4j") // "0.7.8" 
     val libRequests =       "com.lihaoyi"                     %% "requests"             % "0.6.9"
+    val libScalaXml =       "org.scala-lang.modules"          %% "scala-xml"            % "2.1.0"
 
     // lightweight, no deps
     val libCsv =              "com.github.tototoshi"            %% "scala-csv"            % "1.3.7"

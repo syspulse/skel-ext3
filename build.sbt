@@ -311,12 +311,14 @@ lazy val root = (project in file("."))
     sentry_por,
     sentry_kuba,
     sentry_bubbles,
+    sentry_news,
   )
   .dependsOn(
     sentry_gov,
     sentry_por,
     sentry_kuba,
     sentry_bubbles,
+    sentry_news,
   )
   .disablePlugins(sbtassembly.AssemblyPlugin) // this is needed to prevent generating useless assembly and merge error
   .settings(    
@@ -423,6 +425,33 @@ lazy val sentry_bubbles = (project in file("sentry-bubbles"))
 
       libOsLib,
       libRequests,
+
+      libSkelTest % "test",
+      libScalaTest % "test"
+    ),
+  )
+
+lazy val sentry_news = (project in file("sentry-news"))
+  .enablePlugins(JavaAppPackaging)
+  .enablePlugins(DockerPlugin)
+  .enablePlugins(AshScriptPlugin)
+  .settings (
+    sharedConfig,
+    sharedConfigAssembly,
+    sharedConfigDocker,
+    dockerBuildxSettings,
+
+    appDockerConfig("sentry-news","io.hacken.ext.sentinel.App",Seq("detector-bundle.conf","application-dev.conf")),
+
+    libraryDependencies ++= Seq(
+      libExtCore,
+      libExtSentinel,
+      libSkelCore,
+      libSkelDsl,
+
+      libOsLib,
+      libRequests,
+      libScalaXml,
 
       libSkelTest % "test",
       libScalaTest % "test"
