@@ -39,7 +39,6 @@ class RedditFeed(source: String) extends NewsFeed {
       val thumbnail = (entry \ "{http://search.yahoo.com/mrss/}thumbnail" \ "@url").text.trim
 
       val metadata = Map(
-        "type" -> "reddit",
         // "subreddit" -> subreddit,
         // "subreddit_label" -> subredditLabel,
         "subreddit" -> subredditLabel,
@@ -54,6 +53,7 @@ class RedditFeed(source: String) extends NewsFeed {
         publishedDate = publishedDate,
         summary = stripHtml(content).take(1000),
         source = source,
+        typ = "reddit",
         feedMetadata = metadata
       )
     }.toSeq

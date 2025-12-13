@@ -21,7 +21,7 @@ class RssFeedSpec extends AnyFlatSpec with Matchers {
     firstPost.title should not be empty
     firstPost.link should startWith("https://")
     firstPost.publishedDate should be > 0L
-    firstPost.feedMetadata.get("type") shouldBe Some("rss")
+    firstPost.typ shouldBe "rss"
   }
 
   it should "extract categories from RSS feed" in {
@@ -106,7 +106,7 @@ class RssFeedSpec extends AnyFlatSpec with Matchers {
     firstPost.title should not be empty
     firstPost.link should startWith("https://")
     firstPost.publishedDate should be > 0L
-    firstPost.feedMetadata.get("type") shouldBe Some("rss")
+    firstPost.typ shouldBe "rss"
     
     // PR Newswire uses guid that matches link
     firstPost.id should startWith("https://")
@@ -158,7 +158,7 @@ class RssFeedSpec extends AnyFlatSpec with Matchers {
     firstPost.title should not be empty
     firstPost.link should startWith("https://")
     firstPost.publishedDate should be > 0L
-    firstPost.feedMetadata.get("type") shouldBe Some("rss")
+    firstPost.typ shouldBe "rss"
     
     // CoinDesk uses guid with isPermaLink="false" (UUID format)
     firstPost.id should not be empty
@@ -232,7 +232,7 @@ class RssFeedSpec extends AnyFlatSpec with Matchers {
     firstPost.title should not be empty
     firstPost.link should startWith("https://")
     firstPost.publishedDate should be > 0L
-    firstPost.feedMetadata.get("type") shouldBe Some("rss")
+    firstPost.typ shouldBe "rss"
   }
 
   it should "extract author from dc:creator in Decrypt feed" in {
@@ -290,7 +290,7 @@ class RssFeedSpec extends AnyFlatSpec with Matchers {
     firstPost.title should not be empty
     firstPost.link should startWith("https://")
     firstPost.publishedDate should be > 0L
-    firstPost.feedMetadata.get("type") shouldBe Some("rss")
+    firstPost.typ shouldBe "rss"
   }
 
   it should "extract author from dc:creator in The Block feed" in {

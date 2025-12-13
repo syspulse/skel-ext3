@@ -45,7 +45,6 @@ class RssFeed(source: String) extends NewsFeed {
       val mediaUrl = (item \ "{http://search.yahoo.com/mrss/}content" \ "@url").text.trim
 
       val metadata = Map(
-        "type" -> "rss",
         "categories" -> categories,
         "media_url" -> mediaUrl
       ).filter(_._2.nonEmpty)
@@ -58,6 +57,7 @@ class RssFeed(source: String) extends NewsFeed {
         publishedDate = publishedDate,
         summary = stripHtml(description).take(1000),  // Strip CDATA/HTML, limit length
         source = source,
+        typ = "rss",
         feedMetadata = metadata
       )
     }.toSeq

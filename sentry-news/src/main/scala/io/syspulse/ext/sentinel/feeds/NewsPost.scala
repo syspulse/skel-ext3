@@ -8,5 +8,6 @@ case class NewsPost(
   publishedDate: Long,             // Unix timestamp (ms)
   summary: String,
   source: String,
+  typ: String,
   feedMetadata: Map[String, String] // subreddit, categories, thumbnails, etc.
 )

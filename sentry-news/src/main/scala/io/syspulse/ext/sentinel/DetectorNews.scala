@@ -195,19 +195,23 @@ class DetectorNews(pd: PluginDescriptor) extends Sentry with Plugin {
     log.info(s"${rx.getExtId()}: Feed: ${feeds}")
 
     // Fetch all posts from all feeds, applying max limit per feed
+    val ts0 = System.currentTimeMillis()
     val allPosts = feeds.flatMap { feed =>
       feed.fetchFeed() match {
         case Success(posts) =>
           // Apply max limit to this feed (0 = no limit)
           val limitedPosts = if (max > 0) posts.take(max) else posts
-          log.info(s"${rx.getExtId()}: Feed: ${feed.getSource()}: ${posts.size} (${limitedPosts.size} after max)")
+          log.info(s"${rx.getExtId()}: Feed: ${feed.getSource()}: ${posts.size} (max=${limitedPosts.size})")
           limitedPosts
         case Failure(e) =>
           log.warn(s"${rx.getExtId()}: Failed to fetch from ${feed.getSource()}: ${e.getMessage}")
-          errorEvents = errorEvents ++ handleFeedError(rx, feed, e)
+          errorEvents = errorEvents ++ handleFeedError(rx, feed, e, System.currentTimeMillis() - ts0)
           Seq.empty
       }
     }
+
+    val ts1 = System.currentTimeMillis()
+    val latency = ts1 - ts0
 
     // Filter for new posts
     val newPosts = allPosts.filterNot(p => seenPosts.contains(p.id))
@@ -215,7 +219,7 @@ class DetectorNews(pd: PluginDescriptor) extends Sentry with Plugin {
     // Apply regexp filter if configured
     val filteredPosts = filterByRegexp(rx, newPosts)
 
-    log.info(s"${rx.getExtId()}: Posts: ${allPosts.size} (all), ${newPosts.size} (new), ${filteredPosts.size} (filtered)")
+    log.info(s"${rx.getExtId()}: Posts: ${allPosts.size} (all), ${seenPosts.size} (seen), ${newPosts.size} (new), ${filteredPosts.size} (filtered)")
 
     // Update seen posts with size limit
     val allPostIds = allPosts.map(_.id).toSet
@@ -223,7 +227,7 @@ class DetectorNews(pd: PluginDescriptor) extends Sentry with Plugin {
     rx.set("seen_posts", updatedSeen)
 
     // Generate alerts for new filtered posts
-    val postEvents = filteredPosts.map(post => createPostAlert(rx, post))
+    val postEvents = filteredPosts.map(post => createPostAlert(rx, post, latency))
 
     errorEvents ++ postEvents
   }
@@ -242,17 +246,19 @@ class DetectorNews(pd: PluginDescriptor) extends Sentry with Plugin {
     }
   }
 
-  private def createPostAlert(rx: SentryRun, post: NewsPost): Event = {
+  private def createPostAlert(rx: SentryRun, post: NewsPost, latency: Long): Event = {
     val desc = rx.get("desc").asInstanceOf[Option[String]].getOrElse(DetectorNews.DEF_DESC)
 
     val metadata = Map(
+      "type" -> post.typ,
       "id" -> post.id,
       "title" -> post.title,
       "link" -> post.link,
       "author" -> post.author,
       "date" -> DateParser.formatTimestamp(post.publishedDate),
       "summary" -> post.summary,
-      "src" -> post.source,      
+      "src" -> post.source,
+      "latency" -> latency.toString,
       "desc" -> desc.replace("{title}", post.title)
     ) ++ post.feedMetadata
 
@@ -268,7 +274,7 @@ class DetectorNews(pd: PluginDescriptor) extends Sentry with Plugin {
     )
   }
 
-  private def handleFeedError(rx: SentryRun, feed: NewsFeed, error: Throwable): Seq[Event] = {
+  private def handleFeedError(rx: SentryRun, feed: NewsFeed, error: Throwable,latency: Long): Seq[Event] = {
     val trackErr = rx.get("track_err").asInstanceOf[Option[Boolean]].getOrElse(DetectorNews.DEF_TRACK_ERR)
 
     if (!trackErr) return Seq.empty
@@ -291,6 +297,7 @@ class DetectorNews(pd: PluginDescriptor) extends Sentry with Plugin {
           "err" -> errMsg,
           "type" -> feed.getSourceType(),
           "src" -> feed.getSource(),
+          "latency" -> latency.toString,
           "desc" -> desc
         ),
         sev = Some(DetectorNews.DEF_SEV_ERR)
