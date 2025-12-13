@@ -194,12 +194,14 @@ class DetectorNews(pd: PluginDescriptor) extends Sentry with Plugin {
 
     log.info(s"${rx.getExtId()}: Feed: ${feeds}")
 
-    // Fetch all posts from all feeds
-    val allPostsRaw = feeds.flatMap { feed =>
+    // Fetch all posts from all feeds, applying max limit per feed
+    val allPosts = feeds.flatMap { feed =>
       feed.fetchFeed() match {
         case Success(posts) =>
-          log.info(s"${rx.getExtId()}: Feed: ${feed.getSource()}: ${posts.size}")
-          posts
+          // Apply max limit to this feed (0 = no limit)
+          val limitedPosts = if (max > 0) posts.take(max) else posts
+          log.info(s"${rx.getExtId()}: Feed: ${feed.getSource()}: ${posts.size} (${limitedPosts.size} after max)")
+          limitedPosts
         case Failure(e) =>
           log.warn(s"${rx.getExtId()}: Failed to fetch from ${feed.getSource()}: ${e.getMessage}")
           errorEvents = errorEvents ++ handleFeedError(rx, feed, e)
@@ -207,16 +209,13 @@ class DetectorNews(pd: PluginDescriptor) extends Sentry with Plugin {
       }
     }
 
-    // Apply max limit if configured (0 = no limit)
-    val allPosts = if (max > 0) allPostsRaw.take(max) else allPostsRaw
-
     // Filter for new posts
     val newPosts = allPosts.filterNot(p => seenPosts.contains(p.id))
 
     // Apply regexp filter if configured
     val filteredPosts = filterByRegexp(rx, newPosts)
 
-    log.info(s"${rx.getExtId()}: Posts: ${allPostsRaw.size} (all), ${newPosts.size} (new), ${filteredPosts.size} (filtered)")
+    log.info(s"${rx.getExtId()}: Posts: ${allPosts.size} (all), ${newPosts.size} (new), ${filteredPosts.size} (filtered)")
 
     // Update seen posts with size limit
     val allPostIds = allPosts.map(_.id).toSet
